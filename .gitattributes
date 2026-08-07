@@ -1,0 +1,3 @@
+provenance/30b-run/logs/*.jsonl.gz binary
+reports/30b/**/*.pdf binary
+reports/30b/**/*.png binary

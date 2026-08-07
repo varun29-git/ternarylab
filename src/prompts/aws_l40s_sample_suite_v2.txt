@@ -1,0 +1,122 @@
+The capital of France is
+
+The largest planet in our solar system is
+
+A good explanation of why the sky looks blue is
+
+Question: If I leave an ice cube in the sun, what happens?
+Answer:
+
+Question: A glass falls from a table onto a hard floor. What is likely to happen next?
+Answer:
+
+Seventeen multiplied by six equals
+
+Plants need sunlight because
+
+The difference between mammals and reptiles is
+
+Explain gravity to a ten-year-old:
+
+The best way to learn programming is
+
+Write a Python function that returns the larger of two numbers:
+
+Three practical steps for making a strong cup of tea are:
+1.
+
+Translate into French: Good morning, how are you?
+Translation:
+
+Complete this dialogue:
+Customer: Excuse me, where can I find the train station?
+Local:
+
+Summarize in one sentence: Water evaporates when heated, rises as vapor, cools into clouds, and later falls as rain.
+Summary:
+
+Once upon a time, in a small village,
+
+In a surprising discovery, scientists found that
+
+The quick brown fox
+
+The detective opened the locked room and immediately noticed
+
+If people want to work well together, they should
+
+Question: Why do people wear seat belts in cars?
+Answer:
+
+Question: If a plant does not get water for many days, what is likely to happen?
+Answer:
+
+Write a short email asking a professor for an extension on an assignment.
+
+Write three bullet points explaining what photosynthesis does.
+
+Finish this analogy: Bird is to sky as fish is to
+
+Convert this sentence to the past tense: "She walks to school every morning."
+
+Classify the sentiment of this review as positive or negative:
+"The movie started slow, but by the end I absolutely loved it."
+Sentiment:
+
+Question: Which is heavier, a kilogram of steel or a kilogram of feathers?
+Answer:
+
+Write a short bedtime story about a child who is afraid of the dark.
+
+Explain in two sentences why the moon appears to change shape over a month.
+
+Give a one-line Bash command to list all .txt files in the current directory.
+
+Complete this dialogue:
+Parent: Did you finish your homework?
+Child:
+
+Question: What is the main job of the roots of a plant?
+Answer:
+
+Write a short paragraph comparing a bicycle and a motorcycle.
+
+Question: If you drop a ball and a feather in a vacuum, what happens?
+Answer:
+
+Write a polite reply declining a meeting because you are sick.
+
+Explain what an algorithm is in plain language.
+
+Question: Why do shadows change length during the day?
+Answer:
+
+Write a JSON object with keys "name", "age", and "city".
+
+Complete this analogy: Teacher is to school as doctor is to
+
+Question: What usually happens when water reaches 100 degrees Celsius at sea level?
+Answer:
+
+Write two sentences describing a rainy morning in a city.
+
+Translate into Spanish: Where is the nearest hospital?
+Translation:
+
+Question: Why is it dangerous to text while driving?
+Answer:
+
+Write a short product description for a reusable water bottle.
+
+Explain the difference between weather and climate.
+
+Question: If a person studies a little every day instead of cramming at the last minute, what is one likely benefit?
+Answer:
+
+Write a simple SQL query to select all columns from a table named users.
+
+Continue this scene:
+The spaceship doors opened, and the crew saw
+
+Question: What do bees do for flowering plants?
+Answer:

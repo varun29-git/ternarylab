@@ -11,14 +11,18 @@
 | Final validation perplexity | `8.717464182731097` |
 | Exit status | `0` |
 
-The authoritative run card is `provenance/30b-run/RUN_ID.json`; exact model,
+The authoritative run card is `archive/30b-run-original/RUN_ID.json`; exact model,
 training, data, kernel, initialization, and environment settings are in the
 adjacent `configs/` directory.
+
+> **Note**: The original provenance data has been migrated to `archive/30b-run-original/`.
+> The `provenance/30b-run/` path is deprecated. See `provenance/30b-run/README_DEPRECATED.md`
+> for details.
 
 ## Exact Runtime Source
 
 The runtime environment recorded an empty repository diff and these source
-hashes. The corresponding files are frozen in `provenance/30b-run/source/`.
+hashes. The corresponding files are frozen in `archive/30b-run-original/source/`.
 
 | File | SHA-256 |
 | --- | --- |

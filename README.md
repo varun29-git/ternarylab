@@ -13,19 +13,35 @@ held-out validation loss was 2.1653283908963203.
 
 ## Layout
 
+- `archive/30b-run-original/`: **PROTECTED** - Immutable original run artifacts.
+  Never modify. Contains the canonical source snapshot, configs, logs, and metrics.
+- `working/30b-run/`: **SAFE TO MODIFY** - Working copy for experimentation and analysis.
 - `src/`: the continuing production implementation: 20-layer ternary
   Transformer++, FA3 local/global attention, non-affine UnitRMS Q/K
   normalization, SubLN, deterministic grouped-absmean quantization, and
   RMS-matched Muon.
-- `provenance/30b-run/`: immutable evidence from the completed run: resolved
-  configuration, raw telemetry, final metrics, benchmark results, and the
-  exact source snapshot used at runtime.
+- `provenance/30b-run/`: **DEPRECATED** - See `archive/30b-run-original/` for original data.
 - `reports/30b/`: the forensic paper, technical report, charts, tables, and
   scripts used to generate the analysis.
 
+## Archive vs Working Separation
+
+The repository now maintains a clear separation between protected original data
+and modifiable working copies:
+
+| Directory | Purpose | Modification Policy |
+|-----------|---------|---------------------|
+| `archive/` | Immutable original data | **NEVER MODIFY** - Read-only archive |
+| `working/` | Active modifications | **SAFE TO MODIFY** - Working copies |
+| `src/` | Production code | **SAFE TO MODIFY** - Active development |
+| `provenance/` | Legacy redirect | **DEPRECATED** - Points to archive/ |
+
+Each archived directory contains a `_PROTECTION_LOCK` file with SHA-256 hashes
+for integrity verification.
+
 ## Important Provenance Rule
 
-`provenance/30b-run/source/` is the byte-identical six-file source snapshot
+`archive/30b-run-original/source/` is the byte-identical six-file source snapshot
 recorded by the run. `src/` is the production continuation. It has two
 post-run, behavior-preserving pretraining changes:
 
@@ -39,7 +55,7 @@ math, optimization, checkpoints, or the completed 30B run.
 
 ## Reproducing The Audit
 
-The exact resolved settings are under `provenance/30b-run/configs/`. The
+The exact resolved settings are under `archive/30b-run-original/configs/`. The
 training log is stored losslessly as `logs/train.jsonl.gz` to remain below
 GitHub's single-file limit. Read it with `gzip -cd` or Python's `gzip` module.
 
@@ -50,7 +66,7 @@ python3 -m unittest discover -s src/tests
 ```
 
 Training requires the pinned H100 software environment recorded in
-`provenance/30b-run/configs/environment.json`; do not treat a local Mac test
+`archive/30b-run-original/configs/environment.json`; do not treat a local Mac test
 environment as a reproduction of the completed run.
 
 ## Checkpoints And Data

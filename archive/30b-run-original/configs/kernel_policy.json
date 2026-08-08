@@ -1,0 +1,32 @@
+{
+  "attention": {
+    "production_backends": [
+      "fa3",
+      "flex"
+    ],
+    "default_backend": "fa3",
+    "global_pattern": "full causal",
+    "local_pattern": "causal window passed as window_size=(window-1, 0)",
+    "fa3": "primary path for full-causal and fixed-window attention",
+    "flex": "explicit alternative for block-sparse or irregular patterns",
+    "sdpa_reference": "test/reference only; forbidden as an automatic fallback",
+    "silent_fallback": false
+  },
+  "optimizer": {
+    "muon": "external KellerJordan/Muon import via BITNET_MUON_IMPORT",
+    "local_foundations_muon_used": false
+  },
+  "custom_kernels": {
+    "custom_ternary_matmul": false,
+    "custom_rope": false,
+    "custom_attention": "external_fa3_or_pytorch_flex",
+    "packed_bitnet_inference": false
+  },
+  "systems_claim_gates": {
+    "packed_ternary_compute_ready": false,
+    "packed_checkpoint_ready": false,
+    "distributed_alpha_grouping_validated": false,
+    "training_memory_is_conventional_latent_optimizer_memory": true,
+    "allow_1_58_bit_cost_or_memory_claim": false
+  }
+}

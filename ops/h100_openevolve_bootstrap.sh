@@ -6,6 +6,14 @@ set -euo pipefail
 
 exec > >(tee -a /var/log/terminus-openevolve-bootstrap.log) 2>&1
 
+on_bootstrap_error() {
+    status=$?
+    printf 'bootstrap failure (exit=%s); stopping instance\n' "$status" >&2
+    shutdown -h now || true
+    exit "$status"
+}
+trap on_bootstrap_error ERR
+
 : "${TERMINUS_REPO_URL:?missing repository URL}"
 : "${TERMINUS_COMMIT:?missing immutable baseline commit}"
 : "${AWS_ACCESS_KEY_ID:?missing temporary AWS access key}"

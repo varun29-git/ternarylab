@@ -295,10 +295,9 @@ def _packed_ternary_fprop_kernel_large_k(
 ):
     """Optimized BF16 x packed-ternary forward for large K (>= 2048).
 
-    For large K dimensions (many groups), this kernel uses larger BLOCK_N to
-    improve memory coalescing and reduce loop overhead per output element.
-    The larger BLOCK_N amortizes the per-group processing cost across more
-    output columns.
+    For large K dimensions (many groups), this kernel processes multiple groups
+    per iteration to reduce loop overhead and improve instruction scheduling.
+    Each iteration processes 4 groups, reducing the loop count by 4x.
     """
 
     pid = tl.program_id(0)
@@ -316,58 +315,68 @@ def _packed_ternary_fprop_kernel_large_k(
     offs_n = tl.max_contiguous(offs_n, BLOCK_N)
     offs_pack = tl.arange(0, GROUP_SIZE // 4)
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    
+    # Process 4 groups per iteration to reduce loop overhead
+    GROUPS_PER_ITER = 4
+    num_iters = (NUM_GROUPS + GROUPS_PER_ITER - 1) // GROUPS_PER_ITER
 
-    for group in range(0, NUM_GROUPS):
-        packed_k = group * (GROUP_SIZE // 4) + offs_pack
-        packed = tl.load(
-            codes_ptr + packed_k[:, None] * stride_cpk + offs_n[None, :] * stride_cn,
-            mask=offs_n[None, :] < N,
-            other=0,
-        )
-        code0 = packed & 0x03
-        code1 = (packed >> 2) & 0x03
-        code2 = (packed >> 4) & 0x03
-        code3 = (packed >> 6) & 0x03
-        q0 = (code0 & 1).to(tl.float32) - (code0 >> 1).to(tl.float32)
-        q1 = (code1 & 1).to(tl.float32) - (code1 >> 1).to(tl.float32)
-        q2 = (code2 & 1).to(tl.float32) - (code2 >> 1).to(tl.float32)
-        q3 = (code3 & 1).to(tl.float32) - (code3 >> 1).to(tl.float32)
-        scale = tl.load(
-            scales_ptr + group * stride_sg + offs_n * stride_sn,
-            mask=offs_n < N,
-            other=0.0,
-        )
-        w0 = (q0 * scale[None, :]).to(tl.bfloat16)
-        w1 = (q1 * scale[None, :]).to(tl.bfloat16)
-        w2 = (q2 * scale[None, :]).to(tl.bfloat16)
-        w3 = (q3 * scale[None, :]).to(tl.bfloat16)
+    for iter_idx in range(0, num_iters):
+        # Unroll 4 groups per iteration
+        for g in range(GROUPS_PER_ITER):
+            group = iter_idx * GROUPS_PER_ITER + g
+            # Skip if group exceeds NUM_GROUPS (use mask instead of break)
+            valid_group = group < NUM_GROUPS
+            
+            packed_k = group * (GROUP_SIZE // 4) + offs_pack
+            packed = tl.load(
+                codes_ptr + packed_k[:, None] * stride_cpk + offs_n[None, :] * stride_cn,
+                mask=valid_group & (offs_n[None, :] < N),
+                other=0,
+            )
+            code0 = packed & 0x03
+            code1 = (packed >> 2) & 0x03
+            code2 = (packed >> 4) & 0x03
+            code3 = (packed >> 6) & 0x03
+            q0 = (code0 & 1).to(tl.float32) - (code0 >> 1).to(tl.float32)
+            q1 = (code1 & 1).to(tl.float32) - (code1 >> 1).to(tl.float32)
+            q2 = (code2 & 1).to(tl.float32) - (code2 >> 1).to(tl.float32)
+            q3 = (code3 & 1).to(tl.float32) - (code3 >> 1).to(tl.float32)
+            scale = tl.load(
+                scales_ptr + group * stride_sg + offs_n * stride_sn,
+                mask=valid_group & (offs_n < N),
+                other=0.0,
+            )
+            w0 = (q0 * scale[None, :]).to(tl.bfloat16)
+            w1 = (q1 * scale[None, :]).to(tl.bfloat16)
+            w2 = (q2 * scale[None, :]).to(tl.bfloat16)
+            w3 = (q3 * scale[None, :]).to(tl.bfloat16)
 
-        base_k = group * GROUP_SIZE + offs_pack * 4
-        mask_m = offs_m[:, None] < M
-        a0 = tl.load(
-            a_ptr + offs_m[:, None] * stride_am + (base_k + 0)[None, :] * stride_ak,
-            mask=mask_m & ((base_k + 0)[None, :] < K),
-            other=0.0,
-        )
-        a1 = tl.load(
-            a_ptr + offs_m[:, None] * stride_am + (base_k + 1)[None, :] * stride_ak,
-            mask=mask_m & ((base_k + 1)[None, :] < K),
-            other=0.0,
-        )
-        a2 = tl.load(
-            a_ptr + offs_m[:, None] * stride_am + (base_k + 2)[None, :] * stride_ak,
-            mask=mask_m & ((base_k + 2)[None, :] < K),
-            other=0.0,
-        )
-        a3 = tl.load(
-            a_ptr + offs_m[:, None] * stride_am + (base_k + 3)[None, :] * stride_ak,
-            mask=mask_m & ((base_k + 3)[None, :] < K),
-            other=0.0,
-        )
-        accumulator += tl.dot(a0, w0, out_dtype=tl.float32)
-        accumulator += tl.dot(a1, w1, out_dtype=tl.float32)
-        accumulator += tl.dot(a2, w2, out_dtype=tl.float32)
-        accumulator += tl.dot(a3, w3, out_dtype=tl.float32)
+            base_k = group * GROUP_SIZE + offs_pack * 4
+            mask_m = offs_m[:, None] < M
+            a0 = tl.load(
+                a_ptr + offs_m[:, None] * stride_am + (base_k + 0)[None, :] * stride_ak,
+                mask=valid_group & mask_m & ((base_k + 0)[None, :] < K),
+                other=0.0,
+            )
+            a1 = tl.load(
+                a_ptr + offs_m[:, None] * stride_am + (base_k + 1)[None, :] * stride_ak,
+                mask=valid_group & mask_m & ((base_k + 1)[None, :] < K),
+                other=0.0,
+            )
+            a2 = tl.load(
+                a_ptr + offs_m[:, None] * stride_am + (base_k + 2)[None, :] * stride_ak,
+                mask=valid_group & mask_m & ((base_k + 2)[None, :] < K),
+                other=0.0,
+            )
+            a3 = tl.load(
+                a_ptr + offs_m[:, None] * stride_am + (base_k + 3)[None, :] * stride_ak,
+                mask=valid_group & mask_m & ((base_k + 3)[None, :] < K),
+                other=0.0,
+            )
+            accumulator += tl.dot(a0, w0, out_dtype=tl.float32)
+            accumulator += tl.dot(a1, w1, out_dtype=tl.float32)
+            accumulator += tl.dot(a2, w2, out_dtype=tl.float32)
+            accumulator += tl.dot(a3, w3, out_dtype=tl.float32)
 
     out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     tl.store(

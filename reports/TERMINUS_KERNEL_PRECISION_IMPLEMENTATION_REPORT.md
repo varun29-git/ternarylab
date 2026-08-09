@@ -158,22 +158,29 @@ Tensor-Core utilization make the result hardware- and shape-dependent.
 
 ## OpenEvolve initialization
 
-`evolution/packed_ternary_hopper` is now the only supported search seed. Its
-forward kernel starts from the production one-load/four-trit dataflow instead
-of the redundant logical-K baseline. The evaluator:
+`evolution/bitlinear_training_hopper` is the production search target.
+It evolves a data-only unified patch that is applied only to a disposable full
+repository copy, so it can jointly redesign packing, Fprop, Dgrad, FP8 casting,
+DeepGEMM Wgrad integration, and BitLinear wiring without changing the baseline.
+The evaluator:
 
-- rejects library GEMM fallbacks and unsafe source operations;
-- gates irregular-tail correctness before timing;
-- compares against the faster PyTorch/DeepGEMM dense BF16 baseline;
-- includes decode, prefill, and flattened training-token sizes;
+- rejects patches outside the fixed-datatype BitLinear kernel allowlist and
+  blocks secret, credential, networking, and process-execution additions;
+- runs the complete static contract suite before GPU work;
+- gates Fprop/Dgrad/Wgrad numerical parity and compiled autograd with FFN FP8
+  Wgrad enabled;
+- measures a compiled full-model training step that includes packed Fprop,
+  Dgrad, FP8 cast, DeepGEMM Wgrad, and their orchestration overhead;
+- scores median tokens/sec subject to HBM headroom, while retaining component
+  timings and numerical artifacts for diagnosis;
 - takes the exact frozen model shape from `TERMINUS_EVOLVE_DIM`,
   `TERMINUS_EVOLVE_FFN_DIM`, `TERMINUS_EVOLVE_N_HEADS`, and
   `TERMINUS_EVOLVE_N_KV_HEADS`.
 
-Do not run the search against the checked-in 150M defaults when choosing a 2.6B
-production kernel. Fprop, Dgrad, pack, and fused multi-projection kernels should
-be evolved as separate objectives; combining unlike kernels into one score
-would let one fast operation hide another regression.
+The older `evolution/packed_ternary_hopper` seed remains useful only for a
+focused Fprop diagnosis. Do not use it as the production optimizer, and do not
+run either target against the checked-in 150M defaults when choosing a 2.6B
+production kernel.
 
 ## Where custom kernels should be considered next
 

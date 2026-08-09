@@ -23,8 +23,10 @@ held-out validation loss was 2.1653283908963203.
 - `provenance/30b-run/`: **DEPRECATED** - See `archive/30b-run-original/` for original data.
 - `reports/30b/`: the forensic paper, technical report, charts, tables, and
   scripts used to generate the analysis.
-- `evolution/packed_ternary_hopper/`: correctness-gated OpenEvolve seed for the
-  packed ternary forward GEMM on H100, including training-token shapes.
+- `evolution/packed_ternary_hopper/`: focused Fprop microkernel seed retained
+  for diagnostic experiments.
+- `evolution/bitlinear_training_hopper/`: the production OpenEvolve target for
+  the complete fixed-datatype packed-BitLinear forward/backward path on H100.
 - `PRECISION_DEEP_RESEARCH.md`: measured state-size audit, inference precision
   policy, DeepGEMM applicability, and qualification gates.
 - `reports/TERMINUS_KERNEL_PRECISION_IMPLEMENTATION_REPORT.md`: complete

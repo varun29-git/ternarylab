@@ -89,6 +89,9 @@ def build_model_config(args: argparse.Namespace, mode: str) -> BitNetLlamaConfig
         attention_temperature_max=args.attention_temperature_max,
         attention_temperature_init=args.attention_temperature_init,
         attention_softcap=args.attention_softcap,
+        bitlinear_kernel_backend=args.bitlinear_kernel_backend,
+        bitlinear_wgrad_backend=args.bitlinear_wgrad_backend,
+        fp8_wgrad_roles=args.fp8_wgrad_roles,
     )
 
 
@@ -188,6 +191,9 @@ def one_result(args: argparse.Namespace, *, mode: str, batch_size: int) -> Dict[
         "attention_temperature_max": cfg.attention_temperature_max,
         "attention_temperature_init": cfg.attention_temperature_init,
         "attention_softcap": cfg.attention_softcap,
+        "bitlinear_kernel_backend": cfg.bitlinear_kernel_backend,
+        "bitlinear_wgrad_backend": cfg.bitlinear_wgrad_backend,
+        "fp8_wgrad_roles": cfg.fp8_wgrad_roles,
         "ffn_activation": cfg.ffn_activation,
         "use_embedding_projection": cfg.use_embedding_projection,
         "transformer_layer_indices": cfg.transformer_layer_indices,
@@ -304,6 +310,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attention-temperature-max", type=float, default=2.0)
     parser.add_argument("--attention-temperature-init", type=float, default=1.0)
     parser.add_argument("--attention-softcap", type=float, default=0.0)
+    parser.add_argument(
+        "--bitlinear-kernel-backend",
+        choices=["torch_reference", "triton_packed"],
+        default="torch_reference",
+        help="BitLinear forward/Dgrad path to include in the measured training step.",
+    )
+    parser.add_argument(
+        "--bitlinear-wgrad-backend",
+        choices=["torch_bf16", "deepgemm_bf16", "deepgemm_fp8"],
+        default="torch_bf16",
+        help="Wgrad path to include in the measured training step.",
+    )
+    parser.add_argument(
+        "--fp8-wgrad-roles",
+        default="",
+        help="Comma-separated BitLinear roles using FP8 Wgrad; valid only with deepgemm_fp8.",
+    )
     parser.add_argument("--jsonl-output")
     parser.add_argument("--azure-text-output")
     parser.add_argument("--run-label", default="")

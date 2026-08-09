@@ -22,7 +22,6 @@ trap on_bootstrap_error ERR
 
 ROOT=/opt/terminus-openevolve
 BASELINE="$ROOT/baseline"
-CANDIDATE="$ROOT/candidate"
 RESULTS="$ROOT/results"
 mkdir -p "$ROOT"
 
@@ -31,21 +30,14 @@ printf '%s\n' "$TERMINUS_COMMIT" > "$ROOT/baseline_commit.txt"
 nvidia-smi -q > "$ROOT/h100_nvidia_smi.txt"
 nvidia-smi --query-gpu=name,uuid,compute_cap,driver_version,memory.total --format=csv,noheader > "$ROOT/h100_identity.csv"
 
-# The baseline is immutable evidence.  The candidate program is independently
-# copied and also made read-only: OpenEvolve produces all mutations under
-# RESULTS, never in either copy of the implementation.
+# The baseline is immutable evidence.  The system evaluator applies each
+# OpenEvolve patch only to a disposable full-repository copy under /tmp.
+# RESULTS is the only persistent writable search location.
 git clone --no-checkout "$TERMINUS_REPO_URL" "$BASELINE"
 git -C "$BASELINE" checkout --detach "$TERMINUS_COMMIT"
 test "$(git -C "$BASELINE" rev-parse HEAD)" = "$TERMINUS_COMMIT"
 git -C "$BASELINE" status --porcelain | tee "$ROOT/baseline_git_status.txt"
 chmod -R a-w "$BASELINE"
-
-mkdir -p "$CANDIDATE/evolution/packed_ternary_hopper" "$CANDIDATE"
-cp "$BASELINE/evolution/packed_ternary_hopper/initial_program.py" "$CANDIDATE/evolution/packed_ternary_hopper/"
-cp "$BASELINE/evolution/packed_ternary_hopper/evaluator.py" "$CANDIDATE/evolution/packed_ternary_hopper/"
-cp -a "$BASELINE/src" "$CANDIDATE/src"
-cp -a "$BASELINE/reports" "$CANDIDATE/reports"
-chmod -R a-w "$CANDIDATE"
 mkdir -p "$RESULTS"
 
 python3 -m venv --system-site-packages "$ROOT/venv"
@@ -143,44 +135,6 @@ class Handler(BaseHTTPRequestHandler):
 ThreadingHTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
 PY
 
-cat > "$RESULTS/config.yaml" <<'YAML'
-max_iterations: 100000
-checkpoint_interval: 10
-random_seed: 42
-llm:
-  primary_model: "zai.glm-5"
-  primary_model_weight: 1.0
-  api_base: "http://127.0.0.1:8080/v1"
-  api_key: "loopback-only"
-  temperature: 0.6
-  max_tokens: 12000
-  timeout: 240
-  retries: 3
-  retry_delay: 8
-prompt:
-  system_message: |
-    You are the optimization researcher for a production packed-ternary transformer on one NVIDIA H100 SXM (SM90, 80 GB).  You may propose novel algorithmic and Triton scheduling workarounds, but only by evolving the candidate program supplied to OpenEvolve.  The original implementation and reports are immutable evidence at /opt/terminus-openevolve/baseline and /opt/terminus-openevolve/candidate.
-
-    Target: implement a strictly correct, faster H100 kernel for BF16 activation x 2-bit-packed ternary weights.  Each uint8 holds four adjacent K-major codes: 00=0, 01=+1, 10=-1, and 11 is forbidden.  One FP32 grouped scale applies to each 128 logical-K weights for an output column.  Inputs/outputs must remain BF16, accumulation FP32, and no dense-weight materialization is allowed.
-
-    The evaluator is the sole authority.  It requires every correctness/tail case before timing and scores the geometric speedup over the best dense BF16 baseline across q/KV/FFN decode (M=1), prefill (M=128), and training-token shapes (M=512/2048), with current flagship dimensions 768/2048/12 heads/4 KV heads.  Favor transferable mechanisms: byte decode reuse, warp specialization, layouts, tiles, launch geometry, L2 locality, pipeline stages, shape dispatch, and register-pressure control.  Never special-case input values or weaken checks.  Do not edit baseline files, reports, evaluator, source tree, or network/process state.  Return only a complete candidate-program change.
-database:
-  population_size: 48
-  archive_size: 24
-  num_islands: 4
-  elite_selection_ratio: 0.2
-  exploitation_ratio: 0.65
-  similarity_threshold: 0.995
-evaluator:
-  timeout: 300
-  cascade_evaluation: true
-  cascade_thresholds: [1.0]
-  parallel_evaluations: 1
-  enable_artifacts: true
-diff_based_evolution: true
-max_code_length: 45000
-YAML
-
 python "$ROOT/bedrock_openai_proxy.py" > "$ROOT/bedrock_proxy.log" 2>&1 &
 PROXY_PID=$!
 trap 'kill "$PROXY_PID" 2>/dev/null || true' EXIT
@@ -190,17 +144,23 @@ curl --fail --silent --show-error http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"zai.glm-5","messages":[{"role":"user","content":"Reply exactly READY"}],"max_tokens":16,"temperature":0}' \
   > "$ROOT/bedrock_proxy_probe.json"
 
+# The proxy retains the short-lived AWS session, but candidates, evaluator, and
+# OpenEvolve receive no cloud/API credential environment variables.
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_DEFAULT_REGION
+
 # Record the same pre-search score that all candidates must beat.  This makes
 # later claims traceable even if OpenEvolve is interrupted before iteration 1.
-python "$CANDIDATE/evolution/packed_ternary_hopper/evaluator.py" \
+TERMINUS_SYSTEM_BASELINE="$BASELINE" \
+python "$BASELINE/evolution/bitlinear_training_hopper/evaluator.py" \
   > "$RESULTS/baseline_metrics.json"
 
 set +e
 timeout --signal=TERM --kill-after=5m 8h \
+  env TERMINUS_SYSTEM_BASELINE="$BASELINE" \
   openevolve-run \
-    "$CANDIDATE/evolution/packed_ternary_hopper/initial_program.py" \
-    "$CANDIDATE/evolution/packed_ternary_hopper/evaluator.py" \
-    --config "$RESULTS/config.yaml" \
+    "$BASELINE/evolution/bitlinear_training_hopper/initial_program.py" \
+    "$BASELINE/evolution/bitlinear_training_hopper/evaluator.py" \
+    --config "$BASELINE/evolution/bitlinear_training_hopper/config.yaml" \
     --output "$RESULTS/openevolve" \
     --iterations 100000 \
     --log-level INFO \

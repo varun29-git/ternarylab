@@ -1,0 +1,324 @@
+[
+  {
+    "generation": 0,
+    "score": 141.97300181798735,
+    "tflops": 141.97300181798735,
+    "correctness": true,
+    "variant": "seed"
+  },
+  {
+    "generation": 1,
+    "score": 154.96346344566868,
+    "tflops": 154.96346344566868,
+    "correctness": true,
+    "variant": "opt_0"
+  },
+  {
+    "generation": 2,
+    "score": 141.69198067804865,
+    "tflops": 141.69198067804865,
+    "correctness": true,
+    "variant": "opt_1"
+  },
+  {
+    "generation": 3,
+    "score": 86.50836168921192,
+    "tflops": 86.50836168921192,
+    "correctness": true,
+    "variant": "opt_2"
+  },
+  {
+    "generation": 4,
+    "score": 140.41347637404908,
+    "tflops": 140.41347637404908,
+    "correctness": true,
+    "variant": "opt_3"
+  },
+  {
+    "generation": 5,
+    "score": 140.7447644060758,
+    "tflops": 140.7447644060758,
+    "correctness": true,
+    "variant": "opt_4"
+  },
+  {
+    "generation": 6,
+    "score": 102.34885800520186,
+    "tflops": 102.34885800520186,
+    "correctness": true,
+    "variant": "opt_5"
+  },
+  {
+    "generation": 7,
+    "score": 141.15181165403808,
+    "tflops": 141.15181165403808,
+    "correctness": true,
+    "variant": "opt_6"
+  },
+  {
+    "generation": 8,
+    "score": 141.02204577924533,
+    "tflops": 141.02204577924533,
+    "correctness": true,
+    "variant": "opt_7"
+  },
+  {
+    "generation": 9,
+    "score": 140.6157455360879,
+    "tflops": 140.6157455360879,
+    "correctness": true,
+    "variant": "opt_8"
+  },
+  {
+    "generation": 10,
+    "score": 141.09616230943112,
+    "tflops": 141.09616230943112,
+    "correctness": true,
+    "variant": "opt_9"
+  },
+  {
+    "generation": 11,
+    "score": 126.04082367512258,
+    "tflops": 126.04082367512258,
+    "correctness": true,
+    "variant": "opt_10"
+  },
+  {
+    "generation": 12,
+    "score": 140.3400665981287,
+    "tflops": 140.3400665981287,
+    "correctness": true,
+    "variant": "opt_11"
+  },
+  {
+    "generation": 13,
+    "score": 140.13858067594992,
+    "tflops": 140.13858067594992,
+    "correctness": true,
+    "variant": "opt_12"
+  },
+  {
+    "generation": 14,
+    "score": 158.69669683396387,
+    "tflops": 158.69669683396387,
+    "correctness": true,
+    "variant": "opt_13"
+  },
+  {
+    "generation": 15,
+    "score": 158.60293145229744,
+    "tflops": 158.60293145229744,
+    "correctness": true,
+    "variant": "opt_14"
+  },
+  {
+    "generation": 16,
+    "score": 103.05613112267919,
+    "tflops": 103.05613112267919,
+    "correctness": true,
+    "variant": "gen_16"
+  },
+  {
+    "generation": 17,
+    "score": 158.2989522871015,
+    "tflops": 158.2989522871015,
+    "correctness": true,
+    "variant": "gen_17"
+  },
+  {
+    "generation": 18,
+    "score": 141.7480923848425,
+    "tflops": 141.7480923848425,
+    "correctness": true,
+    "variant": "gen_18"
+  },
+  {
+    "generation": 19,
+    "score": 141.3190060597679,
+    "tflops": 141.3190060597679,
+    "correctness": true,
+    "variant": "gen_19"
+  },
+  {
+    "generation": 20,
+    "score": 85.63217182851744,
+    "tflops": 85.63217182851744,
+    "correctness": true,
+    "variant": "gen_20"
+  },
+  {
+    "generation": 21,
+    "score": 85.89934464000001,
+    "tflops": 85.89934464000001,
+    "correctness": true,
+    "variant": "gen_21"
+  },
+  {
+    "generation": 22,
+    "score": 85.91309404002325,
+    "tflops": 85.91309404002325,
+    "correctness": true,
+    "variant": "gen_22"
+  },
+  {
+    "generation": 23,
+    "score": 86.20278073415727,
+    "tflops": 86.20278073415727,
+    "correctness": true,
+    "variant": "gen_23"
+  },
+  {
+    "generation": 24,
+    "score": 157.97290718670106,
+    "tflops": 157.97290718670106,
+    "correctness": true,
+    "variant": "gen_24"
+  },
+  {
+    "generation": 25,
+    "score": 129.86718341556903,
+    "tflops": 129.86718341556903,
+    "correctness": true,
+    "variant": "gen_25"
+  },
+  {
+    "generation": 26,
+    "score": 141.91671194218696,
+    "tflops": 141.91671194218696,
+    "correctness": true,
+    "variant": "gen_26"
+  },
+  {
+    "generation": 27,
+    "score": 140.7447644060758,
+    "tflops": 140.7447644060758,
+    "correctness": true,
+    "variant": "gen_27"
+  },
+  {
+    "generation": 28,
+    "score": 154.8517156410407,
+    "tflops": 154.8517156410407,
+    "correctness": true,
+    "variant": "gen_28"
+  },
+  {
+    "generation": 29,
+    "score": 158.50927680709057,
+    "tflops": 158.50927680709057,
+    "correctness": true,
+    "variant": "gen_29"
+  },
+  {
+    "generation": 30,
+    "score": 86.20278073415727,
+    "tflops": 86.20278073415727,
+    "correctness": true,
+    "variant": "gen_30"
+  },
+  {
+    "generation": 31,
+    "score": 141.15181165403808,
+    "tflops": 141.15181165403808,
+    "correctness": true,
+    "variant": "gen_31"
+  },
+  {
+    "generation": 32,
+    "score": 158.93158509647472,
+    "tflops": 158.93158509647472,
+    "correctness": true,
+    "variant": "gen_32"
+  },
+  {
+    "generation": 33,
+    "score": 141.46796003200942,
+    "tflops": 141.46796003200942,
+    "correctness": true,
+    "variant": "gen_33"
+  },
+  {
+    "generation": 34,
+    "score": 86.07149053248786,
+    "tflops": 86.07149053248786,
+    "correctness": true,
+    "variant": "gen_34"
+  },
+  {
+    "generation": 35,
+    "score": 140.80013685372057,
+    "tflops": 140.80013685372057,
+    "correctness": true,
+    "variant": "gen_35"
+  },
+  {
+    "generation": 36,
+    "score": 127.38661814745889,
+    "tflops": 127.38661814745889,
+    "correctness": true,
+    "variant": "gen_36"
+  },
+  {
+    "generation": 37,
+    "score": 127.933020296668,
+    "tflops": 127.933020296668,
+    "correctness": true,
+    "variant": "gen_37"
+  },
+  {
+    "generation": 38,
+    "score": 140.76321991316735,
+    "tflops": 140.76321991316735,
+    "correctness": true,
+    "variant": "gen_38"
+  },
+  {
+    "generation": 39,
+    "score": 140.24840798483157,
+    "tflops": 140.24840798483157,
+    "correctness": true,
+    "variant": "gen_39"
+  },
+  {
+    "generation": 40,
+    "score": 85.59804361423309,
+    "tflops": 85.59804361423309,
+    "correctness": true,
+    "variant": "gen_40"
+  },
+  {
+    "generation": 41,
+    "score": 140.63415864330725,
+    "tflops": 140.63415864330725,
+    "correctness": true,
+    "variant": "gen_41"
+  },
+  {
+    "generation": 42,
+    "score": 138.17293161464468,
+    "tflops": 138.17293161464468,
+    "correctness": true,
+    "variant": "gen_42"
+  },
+  {
+    "generation": 43,
+    "score": 140.1934770825936,
+    "tflops": 140.1934770825936,
+    "correctness": true,
+    "variant": "gen_43"
+  },
+  {
+    "generation": 44,
+    "score": 140.23009574449273,
+    "tflops": 140.23009574449273,
+    "correctness": true,
+    "variant": "gen_44"
+  },
+  {
+    "generation": 45,
+    "score": 141.22607333388703,
+    "tflops": 141.22607333388703,
+    "correctness": true,
+    "variant": "gen_45"
+  }
+]

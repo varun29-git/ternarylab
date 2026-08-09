@@ -1,19 +1,26 @@
-# Forensic Precision Analysis: Terminus Flagship 30B Training Run
+# Forensic Precision Analysis: Terminus T21-Scale Training Run (30B Tokens)
 
-**Document Version**: 1.0  
-**Analysis Date**: 2026-08-07  
+**Document Version**: 2.0 (Corrected)  
+**Analysis Date**: 2026-08-08  
 **Run ID**: `fresh-h100-curriculum-30b-rmsmatch-b28-nativealloc-20260731T200059Z`
+
+> **⚠️ Critical Clarification**: The "30b" in the run ID refers to **30 billion training tokens** (`max_train_tokens: 30000000000`), NOT 30 billion parameters. This is a T21-scale validation run with ~150M parameters, not the flagship 2.6B model.
 
 ---
 
 ## Executive Summary
 
-This document provides an exhaustive, forensic-level analysis of precision usage across all parameter groups in the Terminus Flagship 30B training run. The analysis traces through the codebase to identify exact precision formats, parameter counts, and percentages of overall model parameters.
+This document provides an exhaustive, forensic-level analysis of precision usage across all parameter groups in the Terminus training run. The analysis traces through the codebase to identify exact precision formats, parameter counts, and percentages of overall model parameters.
+
+**Model Identity**:
+- **Architecture**: T21-scale validation candidate (20 layers, dim 768, GQA-4)
+- **Training Budget**: 30 billion tokens
+- **Parameter Count**: 150,435,880 (~150.4M)
 
 **Key Findings**:
-- **Total Parameters**: 150,530,048 (150.5M)
-- **Ternary-Quantized Weights**: 141,662,208 (94.1% of all parameters)
-- **Full-Precision Parameters**: 8,867,840 (5.9% of all parameters)
+- **Total Parameters**: 150,435,880 (150.4M)
+- **Ternary-Quantized Weights**: 125,829,120 (83.65% of all parameters)
+- **Full-Precision Parameters**: 24,606,760 (16.35% of all parameters)
 - **Training Precision**: BF16 mixed precision with FP32 master weights
 - **Quantization**: BitNet 1.58-bit ternary weights {-1, 0, +1}
 
@@ -35,10 +42,17 @@ From [`model_config.json`](provenance/30b-run/configs/model_config.json):
 | `alpha_group_size` | 128 |
 | `quantize_activations` | `false` |
 | `alpha_mode` | `"deterministic_grouped_absmean"` |
+| `qk_norm_mode` | `"unit_rms"` |
+| `attention_backend` | `"fa3"` |
+| `use_subln` | `true` |
+| `ffn_activation` | `"swiglu"` |
 
 **Derived Values**:
 - `head_dim` = `dim / n_heads` = 768 / 12 = **64**
 - `kv_repeats` = `n_heads / n_kv_heads` = 12 / 4 = **3** (GQA factor)
+
+**Training Budget** (from [`train_config.json`](provenance/30b-run/configs/train_config.json)):
+- `max_train_tokens` = **30,000,000,000** (30B tokens)
 
 ---
 
@@ -411,21 +425,24 @@ logits = (
 
 | Component | Shape | Parameters | Precision |
 |-----------|-------|------------|-----------|
-| **Attention** | | | |
+| **Attention (BitLinear)** | | | |
 | q_proj | (768, 768) | 589,824 | FP32→Ternary |
 | k_proj | (256, 768) | 196,608 | FP32→Ternary |
 | v_proj | (256, 768) | 196,608 | FP32→Ternary |
 | o_proj | (768, 768) | 589,824 | FP32→Ternary |
-| attn_sub_norm | () | 1 | FP32 scalar |
-| **FFN** | | | |
+| **Attention Subtotal** | | **1,572,864** | |
+| **FFN (BitLinear)** | | | |
 | gate_proj | (2048, 768) | 1,572,864 | FP32→Ternary |
 | up_proj | (2048, 768) | 1,572,864 | FP32→Ternary |
 | down_proj | (768, 2048) | 1,572,864 | FP32→Ternary |
-| ffn_sub_norm | () | 1 | FP32 scalar |
-| **Norms** | | | |
+| **FFN Subtotal** | | **4,718,592** | |
+| **Norms (Full Precision)** | | | |
 | attn_norm | (768,) | 768 | FP32 |
 | ffn_norm | (768,) | 768 | FP32 |
-| **Layer Total** | | **7,093,746** | |
+| attn_sub_norm | () | 1 | FP32 scalar |
+| ffn_sub_norm | () | 1 | FP32 scalar |
+| **Norms Subtotal** | | **1,538** | |
+| **Per-Layer Total** | | **6,292,994** | |
 
 ### 3.2 Global Parameters
 
@@ -437,21 +454,21 @@ logits = (
 
 ### 3.3 Total Model Parameters
 
-| Category | Count | Percentage |
-|----------|-------|------------|
-| **Ternary-Quantized (BitLinear)** | | |
-| Attention (20 layers) | 20 × 1,572,864 = 31,457,280 | 20.90% |
-| FFN (20 layers) | 20 × 4,718,592 = 94,371,840 | 62.70% |
-| **Subtotal Ternary** | **125,829,120** | **83.60%** |
-| | | |
-| **Full-Precision** | | |
-| Embeddings | 24,576,000 | 16.33% |
-| RMSNorm (per-layer) | 20 × 1,536 = 30,720 | 0.02% |
-| SingleScaleRMSNorm | 20 × 2 = 40 | 0.00% |
-| Final Norm | 768 | 0.00% |
-| **Subtotal Full-Precision** | **24,607,528** | **16.35%** |
-| | | |
-| **Grand Total** | **150,436,648** | **100.00%** |
+| Category | Calculation | Count | Percentage |
+|----------|-------------|-------|------------|
+| **Ternary-Quantized (BitLinear)** | | | |
+| Attention (20 layers) | 20 × 1,572,864 | 31,457,280 | 20.92% |
+| FFN (20 layers) | 20 × 4,718,592 | 94,371,840 | 62.73% |
+| **Subtotal Ternary** | | **125,829,120** | **83.65%** |
+| | | | |
+| **Full-Precision** | | | |
+| Embeddings | 32000 × 768 | 24,576,000 | 16.34% |
+| RMSNorm (per-layer) | 20 × 1,536 | 30,720 | 0.02% |
+| SingleScaleRMSNorm | 20 × 2 | 40 | 0.00% |
+| Final Norm | 768 | 768 | 0.00% |
+| **Subtotal Full-Precision** | | **24,606,760** | **16.35%** |
+| | | | |
+| **Grand Total** | | **150,435,880** | **100.00%** |
 
 ---
 
@@ -629,11 +646,11 @@ def __init__(self, dim: int, eps: float = 1e-5) -> None:
 
 ## 9. Conclusion
 
-The Terminus Flagship 30B model employs a hybrid precision architecture:
+The Terminus T21-scale model employs a hybrid precision architecture:
 
-1. **Ternary-Quantized Weights (83.6%)**: All linear projections in attention and FFN layers use BitNet 1.58-bit quantization. Weights are stored as FP32 latent values but quantized to ternary {-α, 0, +α} during the forward pass using grouped absmean scaling.
+1. **Ternary-Quantized Weights (83.65%)**: All linear projections in attention and FFN layers use BitNet 1.58-bit quantization. Weights are stored as FP32 latent values but quantized to ternary {-α, 0, +α} during the forward pass using grouped absmean scaling.
 
-2. **Full-Precision Components (16.4%)**: 
+2. **Full-Precision Components (16.35%)**: 
    - Embeddings: 24.6M FP32 parameters
    - Layer norms: 31.5K FP32 parameters
    - Sub-layer norms: 40 FP32 scalar parameters
@@ -681,8 +698,8 @@ attn_sub_norm = 1  # SingleScaleRMSNorm scalar
 ffn_sub_norm = 1  # SingleScaleRMSNorm scalar
 norm_total = attn_norm + ffn_norm + attn_sub_norm + ffn_sub_norm  # 1,538
 
-# Layer total
-layer_total = attn_total + ffn_total + norm_total  # 7,292,994
+# Layer total (ternary + norms)
+layer_total = attn_total + ffn_total + norm_total  # 6,292,994
 
 # Total parameters
 total_ternary = (attn_total + ffn_total) * n_layers  # 125,829,120
@@ -709,6 +726,21 @@ Full-Precision Parameters: 24,606,760 (16.35%)
 1. [`model_config.json`](provenance/30b-run/configs/model_config.json) - Model architecture configuration
 2. [`train_config.json`](provenance/30b-run/configs/train_config.json) - Training hyperparameters
 3. [`kernel_policy.json`](provenance/30b-run/configs/kernel_policy.json) - Attention backend configuration
+
+---
+
+## Appendix C: Document Corrections (v2.0)
+
+This version corrects the following issues identified in v1.0:
+
+| Issue | v1.0 Value | Corrected Value | Notes |
+|-------|------------|-----------------|-------|
+| **Title** | "Terminus Flagship 30B Training Run" | "Terminus T21-Scale Training Run (30B Tokens)" | "30b" refers to token budget, not parameter count |
+| **Executive Summary Total** | 150,530,048 | 150,435,880 | Now consistent with detailed breakdown |
+| **Executive Summary Ternary** | 141,662,208 (94.1%) | 125,829,120 (83.65%) | Now matches Section 3.3 |
+| **Executive Summary Full-Precision** | 8,867,840 (5.9%) | 24,606,760 (16.35%) | Now matches Section 3.3 |
+| **Section 3.1 Layer Total** | 7,093,746 | 6,292,994 | Corrected arithmetic: sum of listed components |
+| **Appendix Output** | 150,435,880 | 150,435,880 | Unchanged (was correct) |
 
 ---
 

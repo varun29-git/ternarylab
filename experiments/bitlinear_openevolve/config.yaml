@@ -1,0 +1,137 @@
+# OpenEvolve Configuration for BitLinear GEMM Optimization
+# 
+# This experiment optimizes the core BitLinear operation in the Terminus Flagship 30B model.
+# The kernel computes: Y = X @ (alpha * ternary(W)).T
+# where ternary weights are {-1, 0, +1} with grouped alpha scales.
+
+# LLM Configuration
+llm:
+  api_base: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  # Alternative: "claude-3-5-sonnet-20241022" via Anthropic API
+  # model: "claude-3-5-sonnet-20241022"
+  # api_base: "https://api.anthropic.com/v1"
+  
+  # Generation parameters
+  temperature: 0.7
+  max_tokens: 4096
+  
+  # System prompt for kernel optimization
+  system_prompt: |
+    You are an expert GPU kernel optimization engineer specializing in Triton kernels for NVIDIA H100 GPUs.
+    
+    Your task is to optimize a BitLinear GEMM kernel that computes: Y = X @ (alpha * ternary(W)).T
+    
+    Key optimization targets:
+    1. Memory coalescing - ensure contiguous memory access patterns
+    2. Shared memory usage - use Triton's shared memory for blocking
+    3. Block size tuning - optimize BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K for H100
+    4. Alpha scale handling - minimize overhead of grouped alpha scales
+    5. Ternary weight optimization - exploit the {-1, 0, +1} sparsity
+    
+    H100 specifications:
+    - 132 streaming multiprocessors (SMs)
+    - 228 KB shared memory per SM
+    - 3.35 TB/s memory bandwidth
+    - 1979 TFLOPS peak FP16/BF16 with sparsity
+    
+    Always ensure correctness first - the kernel must match the reference implementation within 1e-4.
+
+# Evolution Configuration
+evolution:
+  # Population size
+  population_size: 20
+  
+  # Number of generations
+  num_generations: 50
+  
+  # Selection pressure
+  elite_size: 5
+  
+  # Mutation parameters
+  mutation_rate: 0.3
+  crossover_rate: 0.5
+  
+  # Prompt templates for evolution
+  prompt_templates:
+    - |
+      Optimize the following Triton BitLinear GEMM kernel for better performance on H100.
+      Current performance: {score} TFLOPS
+      
+      Focus on:
+      1. Better block size tuning for H100's architecture
+      2. Improved memory access patterns
+      3. Efficient alpha scale handling
+      
+      ```python
+      {code}
+      ```
+      
+      Return the optimized kernel code.
+
+    - |
+      The following BitLinear GEMM kernel needs improvement.
+      Current issue: {error}
+      
+      Fix the issue and optimize for H100:
+      ```python
+      {code}
+      ```
+      
+      Return the corrected and optimized kernel code.
+
+# Evaluation Configuration
+evaluation:
+  # Test dimensions (matching BitLinear in 30B model)
+  test_cases:
+    - M: 1024
+      N: 4096
+      K: 4096
+      group_size: 128
+    - M: 2048
+      N: 4096
+      K: 4096
+      group_size: 128
+    - M: 512
+      N: 4096
+      K: 4096
+      group_size: 128
+  
+  # Correctness threshold
+  correctness_threshold: 1e-4
+  
+  # Performance targets
+  min_tflops: 100  # Minimum acceptable TFLOPS
+  target_tflops: 500  # Target TFLOPS
+  
+  # Scoring function
+  # Score = correctness_weight * (1 if correct else 0) + performance_weight * (tflops / target)
+  scoring:
+    correctness_weight: 1000  # Must pass correctness first
+    performance_weight: 1.0
+
+# Logging Configuration
+logging:
+  # Log level
+  level: "INFO"
+  
+  # Log file
+  log_file: "bitlinear_openevolve.log"
+  
+  # Save intermediate results
+  save_intermediate: true
+  intermediate_dir: "results/"
+  
+  # Checkpoint frequency
+  checkpoint_every: 10
+
+# Output Configuration
+output:
+  # Best kernel output
+  best_kernel_file: "best_kernel.py"
+  
+  # Evolution history
+  history_file: "evolution_history.json"
+  
+  # Final report
+  report_file: "final_report.md"

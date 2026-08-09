@@ -1,0 +1,190 @@
+# OpenEvolve Configuration for GEMM Kernel Optimization
+# This configuration file sets up an evolutionary search pipeline to optimize
+# a Triton GEMM kernel for improved performance (TFLOPS throughput).
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+# The LLM is used for code generation and mutation during evolution.
+# Configure the backend API/model for generating candidate kernel implementations.
+
+llm:
+  # Primary model for code generation
+  # Options: "gpt-4", "gpt-4-turbo", "gpt-4o", "claude-3-opus", "claude-3-sonnet"
+  model: "gpt-4"
+  
+  # API key loaded from environment variable
+  # Set OPENAI_API_KEY in your environment before running OpenEvolve
+  api_key: "${OPENAI_API_KEY}"
+  
+  # Alternative: Use Anthropic Claude
+  # model: "claude-3-opus-20240229"
+  # api_key: "${ANTHROPIC_API_KEY}"
+  # api_base: "https://api.anthropic.com"
+  
+  # Generation parameters for code generation
+  temperature: 0.7
+  max_tokens: 4096
+  top_p: 0.95
+  
+  # Retry configuration for API calls
+  max_retries: 3
+  retry_delay_seconds: 2
+
+# =============================================================================
+# Search Configuration
+# =============================================================================
+# Controls the evolutionary search algorithm parameters.
+
+search:
+  # Population settings
+  population_size: 20        # Number of candidate solutions in each generation
+  num_islands: 2             # Number of parallel evolutionary islands
+  
+  # Evolution termination
+  max_generations: 30        # Maximum number of generations to evolve
+  
+  # Selection and reproduction
+  elite_ratio: 0.1           # Fraction of top performers preserved unchanged
+  tournament_size: 3         # Number of candidates in selection tournament
+  
+  # Migration between islands (island model)
+  migration_interval: 5      # Generations between migrations
+  migration_rate: 0.1        # Fraction of population to migrate
+
+# =============================================================================
+# Evolution Strategy Configuration
+# =============================================================================
+# Controls how candidate solutions are mutated and recombined.
+
+evolution:
+  # Mutation settings
+  mutation_rate: 0.8         # Probability of mutating a candidate
+  mutation_strength: "medium"  # Options: "low", "medium", "high"
+  
+  # Crossover settings
+  crossover_rate: 0.3        # Probability of crossover between two parents
+  
+  # Code modification types allowed
+  operations:
+    - "parameter_tuning"      # Adjust block sizes, tile dimensions
+    - "loop_optimization"    # Modify loop unrolling, ordering
+    - "memory_optimization"  # Shared memory usage, prefetching
+    - "instruction_level"    # Inline assembly hints, vectorization
+
+# =============================================================================
+# Path Configuration
+# =============================================================================
+# File paths for the evaluation entry point and seed implementation.
+
+paths:
+  # Entry point: Python file containing the evaluate() function
+  # This function is called to assess each candidate's fitness
+  entry_point: "experiments/gemm_openevolve/evaluator.py"
+  
+  # Seed file: Baseline implementation to start evolution from
+  # Contains the initial kernel code with EVOLVE-BLOCK markers
+  seed_file: "experiments/gemm_openevolve/seed.py"
+  
+  # Output directory for results and checkpoints
+  output_dir: "experiments/gemm_openevolve/results"
+  
+  # Checkpoint directory for resuming interrupted runs
+  checkpoint_dir: "experiments/gemm_openevolve/checkpoints"
+
+# =============================================================================
+# Evaluation Configuration
+# =============================================================================
+# Settings for candidate evaluation and fitness assessment.
+
+evaluation:
+  # Timeout for each evaluation (seconds)
+  # Prevents hanging on problematic kernels
+  timeout_seconds: 120
+  
+  # Number of times to evaluate each candidate (for stochastic robustness)
+  num_evaluations: 1
+  
+  # Whether to cache evaluation results for identical code
+  cache_evaluations: true
+  
+  # Fitness function parameters
+  fitness:
+    # Primary metric: TFLOPS throughput
+    objective: "maximize"
+    
+    # Penalty for compilation failures
+    failure_fitness: 0.0
+    
+    # Bonus for correctness (applied when correctness check passes)
+    correctness_bonus: 0.0
+
+# =============================================================================
+# Logging and Checkpointing Configuration
+# =============================================================================
+# Controls output verbosity and intermediate state saving.
+
+logging:
+  # Log level: "DEBUG", "INFO", "WARNING", "ERROR"
+  level: "INFO"
+  
+  # Log file path (relative to output_dir)
+  log_file: "evolution.log"
+  
+  # Console output
+  console_output: true
+  
+  # Log frequency
+  log_every_n_generations: 1
+  
+  # Detailed per-candidate logging
+  log_candidates: true
+
+checkpoint:
+  # Enable checkpointing for run resumption
+  enabled: true
+  
+  # Save checkpoint every N generations
+  save_every_n_generations: 5
+  
+  # Keep best individuals in checkpoint
+  keep_best: true
+  
+  # Maximum number of checkpoints to retain
+  max_checkpoints: 3
+
+# =============================================================================
+# Resource Configuration
+# =============================================================================
+# Hardware and compute resource settings.
+
+resources:
+  # GPU device to use (CUDA device index)
+  gpu_device: 0
+  
+  # Maximum memory allocation per evaluation (GB)
+  max_memory_gb: 8
+  
+  # Number of parallel evaluations (if supported)
+  num_parallel_evals: 1
+
+# =============================================================================
+# Advanced Settings
+# =============================================================================
+# Fine-tuning options for experienced users.
+
+advanced:
+  # Random seed for reproducibility
+  random_seed: 42
+  
+  # Early stopping if no improvement after N generations
+  early_stopping_patience: 10
+  
+  # Minimum improvement threshold for early stopping reset
+  improvement_threshold: 0.001
+  
+  # Enable diversity preservation
+  diversity_preservation: true
+  
+  # Diversity penalty weight (higher = more diverse population)
+  diversity_weight: 0.1

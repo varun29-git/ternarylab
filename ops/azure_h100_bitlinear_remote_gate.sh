@@ -285,7 +285,7 @@ python src/throughput_probe.py \
   --heads "$TERMINUS_EVOLVE_N_HEADS" \
   --kv-heads "$TERMINUS_EVOLVE_N_KV_HEADS" \
   --steps 8 --warmup-steps 4 \
-  --compile --compile-mode max-autotune --optimizer muon \
+  --compile --compile-mode default --optimizer muon \
   --attention-backend fa3 \
   --bitlinear-kernel-backend triton_packed \
   --bitlinear-wgrad-backend deepgemm_fp8 \

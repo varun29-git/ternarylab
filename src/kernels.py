@@ -22,7 +22,8 @@ def flash_attn3_func() -> Optional[Callable]:
     """Return the Hopper FlashAttention-3 interface used by Terminus Flagship 30B."""
 
     try:
-        import flash_attn_interface
+        # flash_attn package exposes flash_attn_interface as a submodule
+        from flash_attn import flash_attn_interface
     except Exception:
         return None
     return getattr(flash_attn_interface, "flash_attn_func", None)

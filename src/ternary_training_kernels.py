@@ -402,6 +402,70 @@ def _transpose_per_group_fp8_kernel(
     tl.store(scale_ptr + n * stride_sn + group * stride_sg, scale)
 
 
+@triton.jit
+def _transpose_per_group_fp8_kernel_optimized(
+    input_ptr,
+    output_ptr,
+    scale_ptr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    GROUPS_PER_PROGRAM: tl.constexpr,
+    stride_im: tl.constexpr,
+    stride_in: tl.constexpr,
+    stride_on: tl.constexpr,
+    stride_om: tl.constexpr,
+    stride_sn: tl.constexpr,
+    stride_sg: tl.constexpr,
+):
+    """Optimized FP8 transpose with multiple groups per program.
+
+    This reduces kernel launch overhead by processing GROUPS_PER_PROGRAM groups
+    per program, improving occupancy and memory coalescing on H100.
+    
+    Note: Triton doesn't support 'break' in for loops, so we use masking to
+    handle edge cases where group >= total_groups.
+    """
+
+    pid = tl.program_id(0)
+    total_groups = tl.cdiv(M, GROUP_SIZE)
+    
+    # Each program handles GROUPS_PER_PROGRAM consecutive groups for one N
+    n = pid % N
+    group_start = (pid // N) * GROUPS_PER_PROGRAM
+    
+    # Process multiple groups per program using masking (no break allowed in Triton)
+    for g in range(GROUPS_PER_PROGRAM):
+        group = group_start + g
+        # Use mask to skip invalid groups instead of break
+        valid_group = group < total_groups
+        
+        offs_m = group * GROUP_SIZE + tl.arange(0, GROUP_SIZE)
+        mask_m = valid_group & (offs_m < M)
+        
+        # Load with combined mask - invalid groups load zeros
+        values = tl.load(
+            input_ptr + offs_m * stride_im + n * stride_in,
+            mask=mask_m,
+            other=0.0,
+        ).to(tl.float32)
+        
+        # Compute amax - for invalid groups, this will be 0 (from other=0.0)
+        # Use max with small epsilon to avoid div by zero
+        amax = tl.maximum(tl.max(tl.abs(values), axis=0), 1.0e-4)
+        scale = amax / 448.0
+        quantized = (values / scale).to(tl.float8e4nv)
+        
+        # Store with mask - invalid groups don't write
+        tl.store(
+            output_ptr + n * stride_on + offs_m * stride_om,
+            quantized,
+            mask=mask_m,
+        )
+        # Only write scale for valid groups
+        tl.store(scale_ptr + n * stride_sn + group * stride_sg, scale, mask=valid_group)
+
+
 def _require_production_group_size(group_size: int) -> None:
     if int(group_size) != PRODUCTION_GROUP_SIZE:
         raise ValueError(
@@ -621,13 +685,20 @@ def transpose_per_group_fp8(
     groups = triton.cdiv(m, group_size)
     output = torch.empty((n, m), device=matrix.device, dtype=torch.float8_e4m3fn)
     scales = torch.empty((n, groups), device=matrix.device, dtype=torch.float32)
-    _transpose_per_group_fp8_kernel[(n * groups,)](
+    
+    # Use optimized kernel with multiple groups per program for better occupancy
+    # For typical wgrad shapes (M=128-512, N=1024-4096), process 4-8 groups per program
+    groups_per_program = max(1, min(8, groups))
+    num_programs = n * triton.cdiv(groups, groups_per_program)
+    
+    _transpose_per_group_fp8_kernel_optimized[(num_programs,)](
         matrix,
         output,
         scales,
         M=m,
         N=n,
         GROUP_SIZE=group_size,
+        GROUPS_PER_PROGRAM=groups_per_program,
         stride_im=matrix.stride(0),
         stride_in=matrix.stride(1),
         stride_on=output.stride(0),

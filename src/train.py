@@ -120,6 +120,9 @@ class TrainConfig:
     quantization_start_strength: float = 1.0
     quantization_end_strength: float = 1.0
     quantize_activations: bool = False
+    bitlinear_kernel_backend: str = "torch_reference"
+    bitlinear_wgrad_backend: str = "torch_bf16"
+    fp8_wgrad_roles: str = ""
     attention_backend: str = "fa3"
     tensor_parallel_size: int = 1
     loss_chunk_size: int = 0
@@ -322,6 +325,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quantization-start-strength", type=float, default=1.0)
     parser.add_argument("--quantization-end-strength", type=float, default=1.0)
     parser.add_argument("--enable-activation-quantization", action="store_true")
+    parser.add_argument(
+        "--bitlinear-kernel-backend",
+        choices=["torch_reference", "triton_packed"],
+        default="torch_reference",
+        help="Reference fake-quant F.linear or native packed Hopper Fprop/Dgrad.",
+    )
+    parser.add_argument(
+        "--bitlinear-wgrad-backend",
+        choices=["torch_bf16", "deepgemm_bf16", "deepgemm_fp8"],
+        default="torch_bf16",
+        help="Dense Wgrad backend. deepgemm_fp8 is qualification-only and role-gated.",
+    )
+    parser.add_argument(
+        "--fp8-wgrad-roles",
+        default="",
+        help="Comma-separated BitLinear roles; recommended first stage is ffn_gate,ffn_up,ffn_down.",
+    )
     parser.add_argument(
         "--attention-backend",
         choices=["fa3", "flex", "sdpa_reference"],
@@ -535,6 +555,9 @@ def config_from_args(args: argparse.Namespace) -> TrainConfig:
         quantization_start_strength=args.quantization_start_strength,
         quantization_end_strength=args.quantization_end_strength,
         quantize_activations=args.enable_activation_quantization,
+        bitlinear_kernel_backend=args.bitlinear_kernel_backend,
+        bitlinear_wgrad_backend=args.bitlinear_wgrad_backend,
+        fp8_wgrad_roles=args.fp8_wgrad_roles,
         attention_backend=args.attention_backend,
         tensor_parallel_size=args.tensor_parallel_size,
         loss_chunk_size=args.loss_chunk_size,
@@ -612,6 +635,10 @@ _SOURCE_CONTRACT_FILES = (
     "optim.py",
     "train.py",
     "run_h100_e2e.sh",
+    "ternary_training.py",
+    "ternary_training_kernels.py",
+    "ternary_training_preflight.py",
+    "deepgemm_integration.py",
 )
 _RESUME_RUNTIME_FIELDS = {
     "output_dir",
@@ -759,6 +786,9 @@ def run_training(train_config: TrainConfig, *, dry_run: bool = False) -> None:
         transformer_alpha_mode=train_config.transformer_alpha_mode,
         alpha_group_size=train_config.alpha_group_size,
         quantize_activations=train_config.quantize_activations,
+        bitlinear_kernel_backend=train_config.bitlinear_kernel_backend,
+        bitlinear_wgrad_backend=train_config.bitlinear_wgrad_backend,
+        fp8_wgrad_roles=train_config.fp8_wgrad_roles,
         gate_prenorm=train_config.gate_prenorm,
         transformer_layer_indices=train_config.transformer_layer_indices,
         local_attention_window=train_config.local_attention_window,
@@ -846,12 +876,10 @@ def run_training(train_config: TrainConfig, *, dry_run: bool = False) -> None:
         )
 
     model = BitNetLlama(model_config).to(device)
-    # torch.compile fuses the BitLinear fake-quant elementwise ops: ~2.2x faster
-    # and ~half the activation memory (it stops materializing the fp32 quant
-    # intermediates). Compile a separate handle used ONLY for the forward; the
-    # eager `model` stays the source of truth for optimizer grouping (by param
-    # name), checkpointing (state_dict keys), and all model.* mutators -- the
-    # compiled handle shares the same parameter tensors, so grads flow through.
+    # Compile a separate forward handle.  The eager model remains authoritative
+    # for optimizer grouping, checkpointing, and the packed-cache refresh that
+    # runs outside Dynamo.  The H100 launcher refuses to reach this point unless
+    # the full compiled packed forward/backward passed its preflight.
     forward_model = model
     if train_config.compile and device.type == "cuda":
         torch.set_float32_matmul_precision("high")
@@ -926,6 +954,13 @@ def run_training(train_config: TrainConfig, *, dry_run: bool = False) -> None:
             "optimizer_kind": train_config.optimizer_kind,
             "optimizer_group_params": group_counts,
             "quantize_activations": model_config.quantize_activations,
+            "bitlinear_kernel_policy": __import__(
+                "ternary_training", fromlist=["training_kernel_policy_report"]
+            ).training_kernel_policy_report(
+                kernel_backend=model_config.bitlinear_kernel_backend,
+                wgrad_backend=model_config.bitlinear_wgrad_backend,
+                fp8_wgrad_roles=model_config.fp8_wgrad_roles,
+            ),
             "optimizer_assignment": {
                 "muon": model.muon_target_module_names(),
                 "adamw_transformer_control": "token embeddings and scalar/non-matrix parameters",
@@ -1066,6 +1101,19 @@ def run_training(train_config: TrainConfig, *, dry_run: bool = False) -> None:
             },
             run_paths["events"],
             run_paths["train_log"],
+        )
+    packed_cache_report = model.refresh_packed_training_cache_(force=True)
+    if model_config.bitlinear_kernel_backend == "triton_packed":
+        emit_json(
+            {
+                "event": "packed_training_cache_initialized",
+                "step": int(step),
+                **packed_cache_report,
+                "persistence": "derived_non_checkpoint_state",
+                "refresh_contract": "after_each_applied_optimizer_update",
+            },
+            run_paths["events"],
+            run_paths["system"],
         )
     val_batcher = TokenBatcher(
         manifest,
@@ -1326,6 +1374,11 @@ def run_training(train_config: TrainConfig, *, dry_run: bool = False) -> None:
                 optimizer.step()
                 current_loss_scale = None
                 optimizer_step_applied = True
+            if optimizer_step_applied:
+                # One deterministic pack now serves post-update telemetry,
+                # validation, the next training forward, and checkpoint
+                # recomputation.  This is intentionally outside torch.compile.
+                model.refresh_packed_training_cache_(force=True)
             if optimizer_step_applied:
                 optimizer_updates_completed += 1
                 for group_index, group in enumerate(optimizer.param_groups):
@@ -3093,6 +3146,31 @@ def validate_train_config(config: TrainConfig) -> None:
         )
     if config.loss_chunk_size < 0:
         raise ValueError("loss_chunk_size must be non-negative")
+    if config.bitlinear_kernel_backend not in {"torch_reference", "triton_packed"}:
+        raise ValueError("invalid bitlinear_kernel_backend")
+    if config.bitlinear_wgrad_backend not in {
+        "torch_bf16",
+        "deepgemm_bf16",
+        "deepgemm_fp8",
+    }:
+        raise ValueError("invalid bitlinear_wgrad_backend")
+    fp8_roles = {role.strip() for role in config.fp8_wgrad_roles.split(",") if role.strip()}
+    valid_fp8_roles = {"q", "k", "v", "o", "ffn_gate", "ffn_up", "ffn_down"}
+    if fp8_roles - valid_fp8_roles:
+        raise ValueError(f"unknown FP8 Wgrad roles: {sorted(fp8_roles - valid_fp8_roles)}")
+    if config.bitlinear_wgrad_backend != "deepgemm_fp8" and fp8_roles:
+        raise ValueError("fp8_wgrad_roles require bitlinear_wgrad_backend=deepgemm_fp8")
+    if config.bitlinear_kernel_backend == "triton_packed":
+        if config.transformer_alpha_mode != "deterministic_grouped_absmean":
+            raise ValueError("triton_packed requires deterministic_grouped_absmean")
+        if config.alpha_group_size != 128:
+            raise ValueError("triton_packed requires alpha_group_size=128")
+        if config.quantization_warmup_steps != 0:
+            raise ValueError("triton_packed requires quantization_warmup_steps=0")
+        if config.quantization_start_strength != 1.0 or config.quantization_end_strength != 1.0:
+            raise ValueError("triton_packed requires full ternary strength from step one")
+        if config.dtype != "bf16" or config.disable_cuda_amp:
+            raise ValueError("triton_packed requires enabled BF16 CUDA autocast")
     if config.milestone_eval_batches < 0:
         raise ValueError("milestone_eval_batches must be non-negative")
     if config.milestone_sample_max_new_tokens < 0:

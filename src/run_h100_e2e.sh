@@ -82,6 +82,34 @@ if [[ "${ENABLE_ACTIVATION_QUANTIZATION}" != "0" ]]; then
   echo "[quantization] ERROR: activation quantization uses integer saturation and is forbidden in the no-hard-cap training path." >&2
   exit 2
 fi
+BITLINEAR_KERNEL_BACKEND="${BITLINEAR_KERNEL_BACKEND:-triton_packed}"
+BITLINEAR_WGRAD_BACKEND="${BITLINEAR_WGRAD_BACKEND:-deepgemm_bf16}"
+FP8_WGRAD_ROLES="${FP8_WGRAD_ROLES:-}"
+ALLOW_FP8_WGRAD="${ALLOW_FP8_WGRAD:-0}"
+RUN_TERNARY_TRAINING_PREFLIGHT="${RUN_TERNARY_TRAINING_PREFLIGHT:-1}"
+case "${BITLINEAR_KERNEL_BACKEND}" in
+  torch_reference|triton_packed) ;;
+  *)
+    echo "[bitlinear] ERROR: invalid BITLINEAR_KERNEL_BACKEND=${BITLINEAR_KERNEL_BACKEND}" >&2
+    exit 2
+    ;;
+esac
+case "${BITLINEAR_WGRAD_BACKEND}" in
+  torch_bf16|deepgemm_bf16|deepgemm_fp8) ;;
+  *)
+    echo "[bitlinear] ERROR: invalid BITLINEAR_WGRAD_BACKEND=${BITLINEAR_WGRAD_BACKEND}" >&2
+    exit 2
+    ;;
+esac
+if [[ "${BITLINEAR_WGRAD_BACKEND}" == "deepgemm_fp8" ]]; then
+  if [[ "${ALLOW_FP8_WGRAD}" != "1" || -z "${FP8_WGRAD_ROLES}" ]]; then
+    echo "[bitlinear] ERROR: FP8 Wgrad requires ALLOW_FP8_WGRAD=1 and an explicit FP8_WGRAD_ROLES list." >&2
+    exit 2
+  fi
+elif [[ -n "${FP8_WGRAD_ROLES}" ]]; then
+  echo "[bitlinear] ERROR: FP8_WGRAD_ROLES must be empty unless deepgemm_fp8 is selected." >&2
+  exit 2
+fi
 TOKENIZER_NAME="${TOKENIZER_NAME:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}"
 TOKENIZER_REVISION="${TOKENIZER_REVISION:-fe8a4ea1ffedaf415f4da2f062534de366a451e6}"
 VOCAB_SIZE="${VOCAB_SIZE:-32000}"
@@ -179,6 +207,9 @@ TQDM_SPEC="${TQDM_SPEC:-tqdm==4.66.4}"
 SENTENCEPIECE_SPEC="${SENTENCEPIECE_SPEC:-sentencepiece==0.2.0}"
 MUON_EXPECTED_COMMIT="${MUON_EXPECTED_COMMIT:-f98f1cacc0263b04290753e32be8d498c1efc806}"
 FA3_EXPECTED_COMMIT="${FA3_EXPECTED_COMMIT:-2402cb0bed7a2185cb9ddbe88fb998656cf73066}"
+DEEPGEMM_EXPECTED_COMMIT="${DEEPGEMM_EXPECTED_COMMIT:-559d79fb6994a58b8a15b4b93bf13ccc16edf247}"
+DEEPGEMM_EXPECTED_VERSION="${DEEPGEMM_EXPECTED_VERSION:-2.6.1}"
+DEEPGEMM_PATH="${DEEPGEMM_PATH:-${RUNTIME_ROOT}/DeepGEMM}"
 MUON_LR="${MUON_LR:-0.003}"
 ADAMW_LR="${ADAMW_LR:-0.003}"
 OPTIMIZER_KIND="${OPTIMIZER_KIND:-muon}"
@@ -224,6 +255,7 @@ export BITNET_ATTENTION_BACKEND="${BITNET_ATTENTION_BACKEND:-${ATTENTION_BACKEND
 export FLA_TILELANG="${FLA_TILELANG:-0}"
 export ATTENTION_BACKEND LOCAL_ATTENTION_WINDOW GLOBAL_ATTENTION_EVERY SEQ_LEN
 export MUON_EXPECTED_COMMIT FA3_EXPECTED_COMMIT FA3_HOPPER_PATH
+export DEEPGEMM_EXPECTED_COMMIT DEEPGEMM_EXPECTED_VERSION DEEPGEMM_PATH
 if [[ -n "${FA3_HOPPER_PATH}" ]]; then
   # Do not put the Hopper source tree on PYTHONPATH.  It contains a
   # `flash_attn_3` source package without the compiled `_C` extension and
@@ -467,6 +499,7 @@ echo "[setup] schedule_horizon_tokens=${SCHEDULE_HORIZON_TOKENS:-<run_budget>}"
 echo "[setup] dtype=${DTYPE} disable_cuda_amp=${DISABLE_CUDA_AMP:-0} loss_scale_init=${LOSS_SCALE_INIT} min_loss_scale=${MIN_LOSS_SCALE}"
 echo "[setup] train_memmap=${COSMO_BIN} validation_memmap=${VAL_BIN}"
 echo "[setup] activation_quantization=${ENABLE_ACTIVATION_QUANTIZATION}"
+echo "[setup] bitlinear_kernel=${BITLINEAR_KERNEL_BACKEND} wgrad=${BITLINEAR_WGRAD_BACKEND} fp8_roles=${FP8_WGRAD_ROLES:-<none>}"
 echo "[setup] compile=${COMPILE} gradient_checkpointing=${GRADIENT_CHECKPOINTING} loss_chunk_size=${LOSS_CHUNK_SIZE} use_subln=${USE_SUBLN}"
 echo "[setup] compile_mode=${COMPILE_MODE}"
 echo "[setup] research_mode=${RESEARCH_MODE} attention_backend=${ATTENTION_BACKEND} strict_no_fallback=1"
@@ -537,6 +570,50 @@ if [[ "${SKIP_INSTALL}" != "1" ]]; then
   python -m pip install -q --no-deps \
     "muon-optimizer @ git+https://github.com/KellerJordan/Muon.git@${MUON_EXPECTED_COMMIT}"
 fi
+
+if [[ "${BITLINEAR_WGRAD_BACKEND}" == deepgemm_* ]]; then
+  if [[ ! -d "${DEEPGEMM_PATH}/.git" ]]; then
+    if [[ "${SKIP_INSTALL}" == "1" ]]; then
+      echo "[deepgemm] ERROR: pinned checkout missing at ${DEEPGEMM_PATH} with SKIP_INSTALL=1." >&2
+      exit 2
+    fi
+    git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git "${DEEPGEMM_PATH}"
+    git -C "${DEEPGEMM_PATH}" checkout --detach "${DEEPGEMM_EXPECTED_COMMIT}"
+    git -C "${DEEPGEMM_PATH}" submodule update --init --recursive
+  fi
+  actual_deepgemm_commit="$(git -C "${DEEPGEMM_PATH}" rev-parse HEAD 2>/dev/null || true)"
+  if [[ "${actual_deepgemm_commit}" != "${DEEPGEMM_EXPECTED_COMMIT}" ]]; then
+    echo "[deepgemm] ERROR: expected commit ${DEEPGEMM_EXPECTED_COMMIT}, got ${actual_deepgemm_commit:-unavailable}." >&2
+    exit 2
+  fi
+  if ! python - "${DEEPGEMM_EXPECTED_VERSION}" <<'PY' >/dev/null 2>&1
+import sys
+try:
+    import deep_gemm
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if getattr(deep_gemm, "__version__", "") == sys.argv[1] else 1)
+PY
+  then
+    if [[ "${SKIP_INSTALL}" == "1" ]]; then
+      echo "[deepgemm] ERROR: DeepGEMM ${DEEPGEMM_EXPECTED_VERSION} is not importable." >&2
+      exit 2
+    fi
+    (cd "${DEEPGEMM_PATH}" && ./install.sh)
+  fi
+  python - "${DEEPGEMM_EXPECTED_VERSION}" "${DEEPGEMM_EXPECTED_COMMIT}" <<'PY'
+import sys
+import deep_gemm
+expected_version, expected_commit = sys.argv[1:]
+actual_version = getattr(deep_gemm, "__version__", "")
+if actual_version != expected_version:
+    raise SystemExit(f"[deepgemm] expected version {expected_version}, got {actual_version}")
+for name in ("bf16_gemm_nt", "bf16_gemm_tn", "fp8_gemm_nt"):
+    if not callable(getattr(deep_gemm, name, None)):
+        raise SystemExit(f"[deepgemm] required API missing: {name}")
+print(f"[deepgemm] verified version={actual_version} commit={expected_commit}")
+PY
+fi
 python - "${MUON_EXPECTED_COMMIT}" <<'PY'
 import json
 from importlib import metadata
@@ -593,6 +670,22 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 if [[ -n "${BITNET_EXTRA_CONTRACT_TEST_DIR:-}" ]]; then
   echo "[contracts] running extra contract tests from ${BITNET_EXTRA_CONTRACT_TEST_DIR}"
   python -m unittest discover -s "${BITNET_EXTRA_CONTRACT_TEST_DIR}" -p 'test_*.py' -v
+fi
+
+if [[ "${RUN_TERNARY_TRAINING_PREFLIGHT}" == "1" && "${BITLINEAR_KERNEL_BACKEND}" == "triton_packed" ]]; then
+  echo "[bitlinear] running packed Fprop/Dgrad and dense Wgrad numerical preflight"
+  FP8_PREFLIGHT_FLAG=()
+  [[ "${BITLINEAR_WGRAD_BACKEND}" == "deepgemm_fp8" ]] && FP8_PREFLIGHT_FLAG=(--allow-fp8-wgrad)
+  python ternary_training_preflight.py \
+    --dim "${MODEL_DIM}" \
+    --ffn-dim "${FFN_DIM}" \
+    --n-heads "${N_HEADS}" \
+    --n-kv-heads "${N_KV_HEADS}" \
+    --group-size "${ALPHA_GROUP_SIZE}" \
+    --wgrad-backend "${BITLINEAR_WGRAD_BACKEND}" \
+    --fp8-wgrad-roles "${FP8_WGRAD_ROLES:-ffn_gate,ffn_up,ffn_down}" \
+    "${FP8_PREFLIGHT_FLAG[@]}" \
+    --json-output "${OUTPUT_DIR}/logs/ternary_training_preflight.json"
 fi
 
 echo "[attention] running strict numerical, boundary, GQA backward, and sparsity preflight"
@@ -776,6 +869,9 @@ ARGS=(
   --loss-scale-init "${LOSS_SCALE_INIT}"
   --min-loss-scale "${MIN_LOSS_SCALE}"
   "${ACTIVATION_QUANTIZATION_FLAG[@]}"
+  --bitlinear-kernel-backend "${BITLINEAR_KERNEL_BACKEND}"
+  --bitlinear-wgrad-backend "${BITLINEAR_WGRAD_BACKEND}"
+  --fp8-wgrad-roles "${FP8_WGRAD_ROLES}"
   --attention-backend "${ATTENTION_BACKEND}"
   --local-attention-window "${LOCAL_ATTENTION_WINDOW}"
   --global-attention-every "${GLOBAL_ATTENTION_EVERY}"

@@ -64,10 +64,14 @@ def kernel_policy() -> Dict[str, object]:
             "local_foundations_muon_used": False,
         },
         "custom_kernels": {
-            "custom_ternary_matmul": False,
+            "custom_ternary_pack": "Triton FP32 grouped-absmean to 4x2-bit cache",
+            "custom_ternary_fprop": "Triton BF16 x packed-ternary with FP32 accumulation",
+            "custom_ternary_dgrad": "Triton BF16 dY x packed-ternary transpose with FP32 accumulation",
+            "custom_fp8_wgrad_cast": "Triton fused transpose/per-128 E4M3 cast; qualification-only",
+            "dense_wgrad": "DeepGEMM BF16 safe default; role-gated FP8 experiment",
             "custom_rope": False,
             "custom_attention": "external_fa3_or_pytorch_flex",
-            "packed_bitnet_inference": False,
+            "packed_bitnet_inference": "same v2 layout; H100 performance gate pending",
         },
         "systems_claim_gates": {
             "packed_ternary_compute_ready": False,

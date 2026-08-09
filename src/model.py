@@ -199,8 +199,6 @@ class BitNetLlamaConfig:
     alpha_group_size: int = 128
     gate_prenorm: bool = True
     attention_backend: str = "fa3"
-    # Embedding precision: torch.bfloat16 for memory efficiency on Ampere+ GPUs
-    embedding_dtype: str = "bfloat16"
     # Terminus Flagship 30B keeps the Test 16 local/global architecture but requires a real
     # sparse kernel: FA3 window_size for the primary path or FlexAttention
     # BlockMask for the explicit alternative. SDPA is reference-only.
@@ -211,6 +209,12 @@ class BitNetLlamaConfig:
     # They are mergeable into embedding/head weights after training.
     use_embedding_projection: bool = False
     quantize_activations: bool = False
+    # Training kernel policy. The reference path preserves portability; the
+    # production Hopper launcher selects triton_packed after its mandatory
+    # numerical preflight. FP8 is restricted to role-gated dense Wgrad.
+    bitlinear_kernel_backend: str = "torch_reference"
+    bitlinear_wgrad_backend: str = "torch_bf16"
+    fp8_wgrad_roles: str = ""
     loss_chunk_size: int = 0
     quantization_strength: float = 1.0
     residual_init_scale: float = 1.0
@@ -268,6 +272,35 @@ class BitNetLlamaConfig:
             )
         if self.loss_chunk_size < 0:
             raise ValueError("loss_chunk_size must be non-negative")
+        if self.bitlinear_kernel_backend not in {"torch_reference", "triton_packed"}:
+            raise ValueError(
+                "bitlinear_kernel_backend must be 'torch_reference' or 'triton_packed'"
+            )
+        if self.bitlinear_wgrad_backend not in {
+            "torch_bf16",
+            "deepgemm_bf16",
+            "deepgemm_fp8",
+        }:
+            raise ValueError(
+                "bitlinear_wgrad_backend must be torch_bf16, deepgemm_bf16, or deepgemm_fp8"
+            )
+        fp8_roles = {role.strip() for role in self.fp8_wgrad_roles.split(",") if role.strip()}
+        valid_roles = {"q", "k", "v", "o", "ffn_gate", "ffn_up", "ffn_down"}
+        if fp8_roles - valid_roles:
+            raise ValueError(f"unknown FP8 Wgrad roles: {sorted(fp8_roles - valid_roles)}")
+        if self.bitlinear_wgrad_backend != "deepgemm_fp8" and fp8_roles:
+            raise ValueError("fp8_wgrad_roles require bitlinear_wgrad_backend='deepgemm_fp8'")
+        if self.bitlinear_kernel_backend == "triton_packed":
+            if self.transformer_alpha_mode != "deterministic_grouped_absmean":
+                raise ValueError(
+                    "triton_packed requires transformer_alpha_mode=deterministic_grouped_absmean"
+                )
+            if self.alpha_group_size != 128:
+                raise ValueError("triton_packed requires alpha_group_size=128")
+            if self.quantize_activations:
+                raise ValueError("triton_packed keeps BF16 activations; activation QAT is separate")
+            if self.quantization_strength != 1.0:
+                raise ValueError("triton_packed requires quantization_strength=1.0")
         if not 0.0 <= self.quantization_strength <= 1.0:
             raise ValueError("quantization_strength must be in [0, 1]")
         if self.residual_init_scale <= 0.0:
@@ -313,8 +346,6 @@ class BitNetLlamaConfig:
                     )
         if self.n_layers % self.global_attention_every != 0:
             raise ValueError("n_layers must contain complete local/global attention cycles")
-        if self.embedding_dtype not in {"float32", "bfloat16"}:
-            raise ValueError("embedding_dtype must be 'float32' or 'bfloat16'")
         hybrid_layer_types(self.n_layers, self.transformer_layer_indices)
 
     @property
@@ -325,19 +356,11 @@ class BitNetLlamaConfig:
     def d_inner(self) -> int:
         return self.dim * self.expand
 
-    def get_embedding_torch_dtype(self) -> torch.dtype:
-        """Convert embedding_dtype string to torch.dtype."""
-        if self.embedding_dtype == "bfloat16":
-            return torch.bfloat16
-        return torch.float32
-
-
 class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-5, dtype: Optional[torch.dtype] = None) -> None:
+    def __init__(self, dim: int, eps: float = 1e-5) -> None:
         super().__init__()
         self.eps = eps
-        # Use specified dtype (bf16 for embeddings) or default FP32
-        self.weight = nn.Parameter(torch.ones(dim, dtype=dtype if dtype is not None else torch.float32))
+        self.weight = nn.Parameter(torch.ones(dim, dtype=torch.float32))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         dtype = x.dtype
@@ -368,17 +391,13 @@ class UnitRMSNorm(nn.Module):
 
 
 class SingleScaleRMSNorm(nn.Module):
-    """RMSNorm with one learned scalar, not one gain per hidden channel.
-    
-    Uses FP8 (float8_e4m3fn) for the scalar weight for memory efficiency.
-    """
+    """RMSNorm with one learned FP32 scalar, not one gain per hidden channel."""
 
     def __init__(self, dim: int, eps: float = 1e-5) -> None:
         super().__init__()
         self.dim = int(dim)
         self.eps = float(eps)
-        # Use FP8 for the scalar weight - more memory efficient
-        self.weight = nn.Parameter(torch.ones((), dtype=torch.float8_e4m3fn))
+        self.weight = nn.Parameter(torch.ones((), dtype=torch.float32))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.dim:
@@ -390,7 +409,6 @@ class SingleScaleRMSNorm(nn.Module):
         normed = x_float * torch.rsqrt(
             (x_float * x_float).mean(dim=-1, keepdim=True) + self.eps
         )
-        # Convert FP8 weight to float for computation
         return (normed * self.weight.float()).to(dtype=dtype)
 
 
@@ -433,6 +451,10 @@ class BitLinear(nn.Module):
         quantization_strength: float = 1.0,
         quantize_activations: bool = False,
         init_scale: float = 1.0,
+        kernel_backend: str = "torch_reference",
+        wgrad_backend: str = "torch_bf16",
+        fp8_wgrad_roles: str = "",
+        kernel_role: str = "generic",
     ) -> None:
         super().__init__()
         if activation_bits < 2:
@@ -449,6 +471,10 @@ class BitLinear(nn.Module):
             raise ValueError("quantization_strength must be in [0, 1]")
         if init_scale <= 0.0:
             raise ValueError("init_scale must be positive")
+        if kernel_backend not in {"torch_reference", "triton_packed"}:
+            raise ValueError("invalid BitLinear kernel backend")
+        if wgrad_backend not in {"torch_bf16", "deepgemm_bf16", "deepgemm_fp8"}:
+            raise ValueError("invalid BitLinear Wgrad backend")
         self.in_features = in_features
         self.out_features = out_features
         self.eps = eps
@@ -460,6 +486,10 @@ class BitLinear(nn.Module):
         self.alpha_group_size = int(alpha_group_size)
         self.init_scale = init_scale
         self.quantize_activations = bool(quantize_activations)
+        self.kernel_backend = str(kernel_backend)
+        self.wgrad_backend = str(wgrad_backend)
+        self.fp8_wgrad_roles = str(fp8_wgrad_roles)
+        self.kernel_role = str(kernel_role)
         self._quantization_strength = float(quantization_strength)
         self.weight = nn.Parameter(torch.empty(out_features, in_features))
         groups_per_row = (self.in_features + self.alpha_group_size - 1) // self.alpha_group_size
@@ -475,6 +505,17 @@ class BitLinear(nn.Module):
             torch.tensor(float(quantization_strength), dtype=torch.float32),
             persistent=False,
         )
+        # The cache is deliberately absent from state_dict: the FP32 latent
+        # weight is canonical and the packed representation is deterministically
+        # rebuilt after load/update.  Keeping it module-local avoids repacking
+        # during activation-checkpoint recomputation.
+        self.register_buffer(
+            "_packed_codes_cache", torch.empty(0, dtype=torch.uint8), persistent=False
+        )
+        self.register_buffer(
+            "_packed_scales_cache", torch.empty(0, dtype=torch.float32), persistent=False
+        )
+        self._packed_cache_weight_version = -1
         self._functional_probe_enabled = False
         self._functional_probe_max_rows = 0
         self._last_functional_probe: Optional[Dict[str, float]] = None
@@ -733,6 +774,35 @@ class BitLinear(nn.Module):
         return x_quant.to(dtype=x.dtype), scale
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.kernel_backend == "triton_packed":
+            if self.alpha_mode != "deterministic_grouped_absmean":
+                raise RuntimeError(
+                    "packed BitLinear preserves only deterministic_grouped_absmean"
+                )
+            if self.quantize_activations:
+                raise RuntimeError("packed BitLinear does not silently quantize activations")
+            if self._quantization_strength != 1.0:
+                raise RuntimeError("packed BitLinear requires quantization_strength=1.0")
+            if self._packed_codes_cache.numel() == 0 or self._packed_scales_cache.numel() == 0:
+                raise RuntimeError(
+                    "packed BitLinear cache is empty; call "
+                    "model.refresh_packed_training_cache_() before the compiled forward"
+                )
+            from ternary_training import packed_ternary_linear
+
+            out = packed_ternary_linear(
+                x,
+                self.weight,
+                self._packed_codes_cache,
+                self._packed_scales_cache,
+                group_size=self.alpha_group_size,
+                wgrad_backend=self.wgrad_backend,
+                role=self.kernel_role,
+                fp8_wgrad_roles=self.fp8_wgrad_roles,
+            )
+            if self._functional_probe_enabled:
+                self._capture_functional_probe(x)
+            return out
         if not self.quantize_activations:
             weight = self.quantized_weight().to(dtype=x.dtype)
             out = F.linear(x, weight, None)
@@ -745,6 +815,39 @@ class BitLinear(nn.Module):
         if self._functional_probe_enabled:
             self._capture_functional_probe(x)
         return out
+
+    @torch.no_grad()
+    def refresh_packed_training_cache_(self, *, force: bool = False) -> bool:
+        """Refresh the deterministic packed cache after a master-weight update.
+
+        Returns True only when a pack was launched.  The Parameter version is a
+        cheap correctness guard; the trainer invokes this method outside
+        ``torch.compile`` before any forward that could observe updated weights.
+        """
+
+        if self.kernel_backend != "triton_packed":
+            return False
+        version = int(self.weight._version)
+        if not force and self._packed_cache_weight_version == version:
+            return False
+        from ternary_training import require_hopper
+        from ternary_training_kernels import pack_grouped_absmean_triton
+
+        require_hopper(self.weight.device)
+        cache_exists = self._packed_codes_cache.numel() > 0
+        codes, scales = pack_grouped_absmean_triton(
+            self.weight,
+            group_size=self.alpha_group_size,
+            eps=self.eps,
+            codes_out=self._packed_codes_cache if cache_exists else None,
+            scales_out=self._packed_scales_cache if cache_exists else None,
+        )
+        if not cache_exists:
+            # First allocation happens before the first compiled forward.
+            self._packed_codes_cache = codes
+            self._packed_scales_cache = scales
+        self._packed_cache_weight_version = version
+        return True
 
     def enable_functional_probe(self, max_rows: int) -> None:
         if max_rows <= 0:
@@ -951,6 +1054,10 @@ class BitNetAttention(nn.Module):
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="q",
         )
         self.k_proj = BitLinear(
             config.dim,
@@ -962,6 +1069,10 @@ class BitNetAttention(nn.Module):
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="k",
         )
         self.v_proj = BitLinear(
             config.dim,
@@ -973,6 +1084,10 @@ class BitNetAttention(nn.Module):
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="v",
         )
         self.o_proj = BitLinear(
             config.n_heads * self.head_dim,
@@ -985,6 +1100,10 @@ class BitNetAttention(nn.Module):
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
             init_scale=config.residual_init_scale,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="o",
         )
         # Terminus Flagship 30B's historical path had unconstrained per-coordinate affine
         # gains on Q/K. Parameter-free Q/K normalization prevents coordinate-wise
@@ -1825,6 +1944,10 @@ class BitNetFeedForward(nn.Module):
                 alpha_group_size=config.alpha_group_size,
                 quantization_strength=config.quantization_strength,
                 quantize_activations=config.quantize_activations,
+                kernel_backend=config.bitlinear_kernel_backend,
+                wgrad_backend=config.bitlinear_wgrad_backend,
+                fp8_wgrad_roles=config.fp8_wgrad_roles,
+                kernel_role="ffn_gate",
             )
         self.up_proj = BitLinear(
             config.dim,
@@ -1836,6 +1959,10 @@ class BitNetFeedForward(nn.Module):
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="ffn_up",
         )
         self.down_proj = BitLinear(
             config.ffn_dim,
@@ -1848,6 +1975,10 @@ class BitNetFeedForward(nn.Module):
             quantization_strength=config.quantization_strength,
             quantize_activations=config.quantize_activations,
             init_scale=config.residual_init_scale,
+            kernel_backend=config.bitlinear_kernel_backend,
+            wgrad_backend=config.bitlinear_wgrad_backend,
+            fp8_wgrad_roles=config.fp8_wgrad_roles,
+            kernel_role="ffn_down",
         )
         self.ffn_sub_norm = (
             SingleScaleRMSNorm(config.ffn_dim, eps=config.rms_norm_eps)
@@ -1867,11 +1998,9 @@ class BitNetFeedForward(nn.Module):
 class BitNetBlock(nn.Module):
     def __init__(self, config: BitNetLlamaConfig, *, layer_index: int) -> None:
         super().__init__()
-        # Use embedding dtype for RMSNorm weights (bf16 for memory efficiency)
-        embedding_dtype = config.get_embedding_torch_dtype()
-        self.attn_norm = RMSNorm(config.dim, eps=config.rms_norm_eps, dtype=embedding_dtype)
+        self.attn_norm = RMSNorm(config.dim, eps=config.rms_norm_eps)
         self.attn = BitNetAttention(config, layer_index=layer_index)
-        self.ffn_norm = RMSNorm(config.dim, eps=config.rms_norm_eps, dtype=embedding_dtype)
+        self.ffn_norm = RMSNorm(config.dim, eps=config.rms_norm_eps)
         self.ffn = BitNetFeedForward(config)
 
     def forward(
@@ -1943,26 +2072,18 @@ class BitNetLlama(nn.Module):
     def __init__(self, config: Optional[BitNetLlamaConfig] = None) -> None:
         super().__init__()
         self.config = config or BitNetLlamaConfig()
-        # Get embedding dtype from config (bf16 for memory efficiency on Ampere+ GPUs)
-        self._embedding_dtype = self.config.get_embedding_torch_dtype()
-        
-        # Create token embeddings with specified dtype
         self.tok_embeddings = nn.Embedding(
             self.config.vocab_size,
             self.config.dim,
             padding_idx=self.config.pad_token_id,
         )
-        # Convert embeddings to bf16 for memory efficiency
-        self.tok_embeddings = self.tok_embeddings.to(dtype=self._embedding_dtype)
-        
-        # Embedding projection layers (OSP rotations) - also use embedding dtype
         self.embed_rot_in = (
-            nn.Linear(self.config.dim, self.config.dim, bias=False).to(dtype=self._embedding_dtype)
+            nn.Linear(self.config.dim, self.config.dim, bias=False)
             if self.config.use_embedding_projection
             else nn.Identity()
         )
         self.embed_rot_out = (
-            nn.Linear(self.config.dim, self.config.dim, bias=False).to(dtype=self._embedding_dtype)
+            nn.Linear(self.config.dim, self.config.dim, bias=False)
             if self.config.use_embedding_projection
             else nn.Identity()
         )
@@ -1980,25 +2101,32 @@ class BitNetLlama(nn.Module):
             BitNetBlock(self.config, layer_index=layer_index)
             for layer_index in range(self.config.n_layers)
         )
-        # RMSNorm weights also use embedding dtype for consistency
-        self.norm = RMSNorm(self.config.dim, eps=self.config.rms_norm_eps, dtype=self._embedding_dtype)
+        self.norm = RMSNorm(self.config.dim, eps=self.config.rms_norm_eps)
         self.reset_parameters()
         self.assert_bias_free()
 
     def reset_parameters(self) -> None:
-        # Initialize embeddings in FP32 then convert to target dtype
         nn.init.normal_(self.tok_embeddings.weight, mean=0.0, std=1.0 / math.sqrt(self.config.dim))
-        self.tok_embeddings = self.tok_embeddings.to(dtype=self._embedding_dtype)
-        
         if self.config.use_embedding_projection:
             nn.init.orthogonal_(self.embed_rot_in.weight)
             nn.init.orthogonal_(self.embed_rot_out.weight)
-            self.embed_rot_in = self.embed_rot_in.to(dtype=self._embedding_dtype)
-            self.embed_rot_out = self.embed_rot_out.to(dtype=self._embedding_dtype)
-        
         if self.config.pad_token_id is not None:
             with torch.no_grad():
                 self.tok_embeddings.weight[self.config.pad_token_id].zero_()
+
+    def _embedded_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Gather from the FP32 master table, then enter the BF16 compute graph.
+
+        CUDA autocast does not downcast ``nn.Embedding``.  Without this explicit
+        boundary, a default-PyTorch detail silently promotes the residual stream
+        to FP32.  The tied embedding/head parameter and its optimizer state stay
+        FP32; only the gathered activation is cast.
+        """
+
+        hidden = self.tok_embeddings(input_ids)
+        if hidden.is_cuda and torch.is_autocast_enabled():
+            hidden = hidden.to(dtype=torch.get_autocast_gpu_dtype())
+        return self.dropout(hidden)
 
     def forward(
         self,
@@ -2027,7 +2155,7 @@ class BitNetLlama(nn.Module):
                 "Use FA3 window_size or an explicit FlexAttention BlockMask implementation."
             )
 
-        x = self.embed_rot_in(self.dropout(self.tok_embeddings(input_ids)))
+        x = self.embed_rot_in(self._embedded_tokens(input_ids))
         attention_stats: Optional[List[Dict[str, object]]] = [] if return_attention_stats else None
         layer_activation_stats: Optional[List[Dict[str, object]]] = (
             [] if return_activation_stats else None
@@ -2144,7 +2272,7 @@ class BitNetLlama(nn.Module):
                 "or context-eviction policy for global layers"
             )
 
-        x = self.embed_rot_in(self.dropout(self.tok_embeddings(input_ids)))
+        x = self.embed_rot_in(self._embedded_tokens(input_ids))
         cos, sin = self.rotary(
             seq_len,
             device=x.device,
@@ -2287,6 +2415,28 @@ class BitNetLlama(nn.Module):
             if isinstance(module, BitLinear):
                 yield name, module
 
+    @torch.no_grad()
+    def refresh_packed_training_cache_(self, *, force: bool = False) -> Dict[str, int]:
+        """Refresh every changed BitLinear cache outside the compiled graph."""
+
+        refreshed = 0
+        code_bytes = 0
+        scale_bytes = 0
+        for module in self.bitlinear_modules():
+            if module.refresh_packed_training_cache_(force=force):
+                refreshed += 1
+            code_bytes += module._packed_codes_cache.numel() * module._packed_codes_cache.element_size()
+            scale_bytes += (
+                module._packed_scales_cache.numel()
+                * module._packed_scales_cache.element_size()
+            )
+        return {
+            "refreshed_modules": refreshed,
+            "code_bytes": code_bytes,
+            "scale_bytes": scale_bytes,
+            "total_bytes": code_bytes + scale_bytes,
+        }
+
     def named_bitlinear_weight_parameters(self) -> List[Tuple[str, nn.Parameter]]:
         return [(name, module.weight) for name, module in self.bitlinear_named_modules()]
 
@@ -2374,6 +2524,9 @@ class BitNetLlama(nn.Module):
                 {
                     "name": name,
                     "role": self.bitlinear_role(name),
+                    "kernel_role": module.kernel_role,
+                    "kernel_backend": module.kernel_backend,
+                    "wgrad_backend": module.wgrad_backend,
                     "optimizer_group": self.optimizer_group_for_module(name),
                     "alpha": float(module.alpha.detach().float()),
                     "alpha_min": float(alpha_values.min()),
@@ -3168,6 +3321,13 @@ class BitNetLlama(nn.Module):
             "alpha_is_trainable": bool(self.alpha_parameters()),
             "alpha_trainable_params": sum(param.numel() for param in self.alpha_parameters()),
             "quantize_activations": bool(self.config.quantize_activations),
+            "bitlinear_kernel_backend": self.config.bitlinear_kernel_backend,
+            "bitlinear_wgrad_backend": self.config.bitlinear_wgrad_backend,
+            "fp8_wgrad_roles": [
+                role.strip()
+                for role in self.config.fp8_wgrad_roles.split(",")
+                if role.strip()
+            ],
             "residual_init_scale": self.config.residual_init_scale,
             "layers": self.config.n_layers,
             "dim": self.config.dim,

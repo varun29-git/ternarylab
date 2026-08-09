@@ -1,0 +1,47 @@
+max_iterations: 100
+checkpoint_interval: 10
+random_seed: 42
+
+llm:
+  primary_model: "gpt-5-nano"
+  primary_model_weight: 1.0
+  api_base: "https://api.openai.com/v1"
+  temperature: 0.6
+  max_tokens: 12000
+  timeout: 180
+
+prompt:
+  system_message: |
+    You optimize the forward Triton packed-ternary GEMM for NVIDIA H100 (SM90).
+    Preserve packed_ternary_matmul's signature and exact semantics. Codes are
+    K-major 2-bit values with shape [packed_K, N]: 00=0, 01=+1, 10=-1,
+    11 is forbidden. Four adjacent logical K weights share each byte. Scales
+    have shape [K_group, N], with one FP32 value per 128-value K group.
+    Activations and outputs are BF16; accumulate in FP32. Never materialize the
+    complete dense weight, call torch matmul/linear, cache outputs, specialize
+    to test values, alter inputs, access files/network/processes, or weaken
+    validation. Preserve BF16 activations; INT8 activation quantization changes
+    this checkpoint's semantics. Optimize real decode, prefill, and flattened
+    training-token shapes using
+    SM90-aware tiling, coalesced loads, one-load/four-trit decode, unpack reuse,
+    L2-friendly program ordering, warp count, and pipeline stages. Correctness
+    is a hard gate; performance is scored only after every tail and
+    production-shape check passes.
+
+database:
+  population_size: 40
+  archive_size: 20
+  num_islands: 3
+  elite_selection_ratio: 0.2
+  exploitation_ratio: 0.7
+  similarity_threshold: 0.995
+
+evaluator:
+  timeout: 300
+  cascade_evaluation: true
+  cascade_thresholds: [1.0]
+  parallel_evaluations: 1
+  enable_artifacts: true
+
+diff_based_evolution: true
+max_code_length: 30000

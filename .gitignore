@@ -16,6 +16,7 @@ runs/
 checkpoints/
 artifacts/
 evaluation_outputs/
+openevolve_output/
 
 # Cloud credentials and local configuration
 .env

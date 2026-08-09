@@ -49,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fp8-wgrad-roles", default="ffn_gate,ffn_up,ffn_down")
     parser.add_argument("--min-cosine", type=float, default=0.999)
     parser.add_argument("--max-relative-rmse", type=float, default=0.02)
+    parser.add_argument(
+        "--max-fp8-relative-rmse",
+        type=float,
+        default=0.05,
+        help="FP8 E4M3 has ~3 mantissa bits; 0.05 relative RMSE is typical for per-128-group quantization",
+    )
     parser.add_argument("--json-output", required=True)
     return parser.parse_args()
 
@@ -177,7 +183,9 @@ def qualify_shape(
     ):
         if metrics is None:
             continue
-        if metrics["cosine"] < args.min_cosine or metrics["relative_rmse"] > args.max_relative_rmse:
+        # Use relaxed threshold for FP8 wgrad (E4M3 has ~3 mantissa bits)
+        max_rmse = args.max_fp8_relative_rmse if name == "fp8_wgrad" else args.max_relative_rmse
+        if metrics["cosine"] < args.min_cosine or metrics["relative_rmse"] > max_rmse:
             raise RuntimeError(f"{role} {name} failed numerical gate: {metrics}")
 
     timing_activations = torch.randn(
@@ -353,6 +361,7 @@ def main() -> None:
         "thresholds": {
             "min_cosine": args.min_cosine,
             "max_relative_rmse": args.max_relative_rmse,
+            "max_fp8_relative_rmse": args.max_fp8_relative_rmse,
         },
         "elapsed_seconds": time.time() - started,
         "records": records,

@@ -117,10 +117,16 @@ def one_result(args: argparse.Namespace, *, mode: str, batch_size: int) -> Dict[
         if args.optimizer == "none"
         else build_optimizer(model, OptimizerConfig(kind=args.optimizer))
     )
+    packed_cache_at_start: Dict[str, int] | None = None
+    if cfg.bitlinear_kernel_backend == "triton_packed":
+        # The cache is derived from the FP32 master weights and must exist before
+        # Dynamo observes the compiled forward.
+        packed_cache_at_start = model.refresh_packed_training_cache_()
     if args.compile:
         torch._dynamo.config.cache_size_limit = 64
         torch._dynamo.config.accumulated_cache_size_limit = 256
     forward_model = torch.compile(model, mode=args.compile_mode) if args.compile else model
+
     token_stream = torch.randint(
         1,
         cfg.vocab_size,
@@ -142,6 +148,11 @@ def one_result(args: argparse.Namespace, *, mode: str, batch_size: int) -> Dict[
             loss.backward()
             if optimizer is not None:
                 optimizer.step()
+                if cfg.bitlinear_kernel_backend == "triton_packed":
+                    # Include the mandatory post-update repack in the measured
+                    # step.  Reusing stale ternary codes would be incorrect and
+                    # would overstate packed-training throughput.
+                    model.refresh_packed_training_cache_()
         return float(loss.detach().cpu())
 
     losses = []
@@ -194,6 +205,7 @@ def one_result(args: argparse.Namespace, *, mode: str, batch_size: int) -> Dict[
         "bitlinear_kernel_backend": cfg.bitlinear_kernel_backend,
         "bitlinear_wgrad_backend": cfg.bitlinear_wgrad_backend,
         "fp8_wgrad_roles": cfg.fp8_wgrad_roles,
+        "packed_cache_at_start": packed_cache_at_start,
         "ffn_activation": cfg.ffn_activation,
         "use_embedding_projection": cfg.use_embedding_projection,
         "transformer_layer_indices": cfg.transformer_layer_indices,

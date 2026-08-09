@@ -57,12 +57,31 @@ REDACTION = re.compile(
     r"(?i)((?:api[_-]?key|secret|password|token|authorization)\s*[=:]\s*)[^\s,;]+"
 )
 
-DIM = int(os.environ.get("TERMINUS_EVOLVE_DIM", "768"))
-FFN_DIM = int(os.environ.get("TERMINUS_EVOLVE_FFN_DIM", "2048"))
-N_HEADS = int(os.environ.get("TERMINUS_EVOLVE_N_HEADS", "12"))
-N_KV_HEADS = int(os.environ.get("TERMINUS_EVOLVE_N_KV_HEADS", "4"))
-SEQ_LEN = int(os.environ.get("TERMINUS_EVOLVE_SEQ_LEN", "512"))
-BATCH_SIZE = int(os.environ.get("TERMINUS_EVOLVE_BATCH", "4"))
+TARGET_PROFILE = "terminus_400m_64k_h100_v1"
+# The first system-search target is deliberately frozen.  With the tied 64k
+# vocabulary, this is 401,122,344 trainable parameters under
+# ``transformerpp_counts``. It retains the fixed four-local/one-global cadence
+# with 16 local and 4 global layers. It is not the 150M development configuration and
+# it is not the later 2.6B production shape.
+TARGET_SHAPE = {
+    "vocab_size": 64_000,
+    "dim": 1_024,
+    "layers": 20,
+    "ffn_dim": 4_608,
+    "n_heads": 16,
+    "n_kv_heads": 4,
+    "batch_size": 14,
+    "seq_len": 4_096,
+}
+TARGET_SHAPE_ENV_VARS = (
+    "TERMINUS_EVOLVE_DIM",
+    "TERMINUS_EVOLVE_LAYERS",
+    "TERMINUS_EVOLVE_FFN_DIM",
+    "TERMINUS_EVOLVE_N_HEADS",
+    "TERMINUS_EVOLVE_N_KV_HEADS",
+    "TERMINUS_EVOLVE_BATCH",
+    "TERMINUS_EVOLVE_SEQ_LEN",
+)
 
 
 def _result(metrics: Dict[str, object], artifacts: Dict[str, object]):
@@ -181,6 +200,43 @@ def _run(command: Iterable[str], *, cwd: Path, env: Dict[str, str], timeout: int
     return output
 
 
+def _profile_env_int(name: str, expected: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return expected
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"target-shape environment variable must be an integer: {name}={raw!r}") from exc
+    if value <= 0:
+        raise RuntimeError(f"target-shape environment variable must be positive: {name}={value}")
+    if value != expected:
+        raise RuntimeError(
+            f"{TARGET_PROFILE} requires {name}={expected}, got {value}; "
+            "the 400M target must not silently change"
+        )
+    return value
+
+
+def _target_shape() -> Dict[str, int]:
+    environment_names = {
+        "dim": "TERMINUS_EVOLVE_DIM",
+        "layers": "TERMINUS_EVOLVE_LAYERS",
+        "ffn_dim": "TERMINUS_EVOLVE_FFN_DIM",
+        "n_heads": "TERMINUS_EVOLVE_N_HEADS",
+        "n_kv_heads": "TERMINUS_EVOLVE_N_KV_HEADS",
+        "batch_size": "TERMINUS_EVOLVE_BATCH",
+        "seq_len": "TERMINUS_EVOLVE_SEQ_LEN",
+    }
+    return {
+        "vocab_size": TARGET_SHAPE["vocab_size"],
+        **{
+            field: _profile_env_int(environment_names[field], TARGET_SHAPE[field])
+            for field in environment_names
+        },
+    }
+
+
 def _prepare_trial(patch: str) -> Tuple[tempfile.TemporaryDirectory, Path, Dict[str, str]]:
     temporary = tempfile.TemporaryDirectory(prefix="terminus-bitlinear-evolve-")
     trial = Path(temporary.name) / "trial"
@@ -246,6 +302,7 @@ def evaluate_stage2(program_path: str):
     started = time.monotonic()
     try:
         _require_h100()
+        target_shape = _target_shape()
         patch = _extract_patch(Path(program_path))
         paths = _validate_patch(patch)
         temporary, trial, env = _prepare_trial(patch)
@@ -260,8 +317,10 @@ def evaluate_stage2(program_path: str):
                 [
                     sys.executable,
                     "src/ternary_training_preflight.py",
-                    "--dim", str(DIM), "--ffn-dim", str(FFN_DIM),
-                    "--n-heads", str(N_HEADS), "--n-kv-heads", str(N_KV_HEADS),
+                    "--dim", str(target_shape["dim"]),
+                    "--ffn-dim", str(target_shape["ffn_dim"]),
+                    "--n-heads", str(target_shape["n_heads"]),
+                    "--n-kv-heads", str(target_shape["n_kv_heads"]),
                     "--group-size", "128", "--wgrad-backend", "deepgemm_fp8",
                     "--fp8-wgrad-roles", "ffn_gate,ffn_up,ffn_down",
                     "--allow-fp8-wgrad", "--warmup", "2", "--iterations", "5",
@@ -275,12 +334,22 @@ def evaluate_stage2(program_path: str):
                 [
                     sys.executable,
                     "src/throughput_probe.py",
-                    "--modes", "transformerpp", "--batch-sizes", str(BATCH_SIZE),
-                    "--seq-len", str(SEQ_LEN), "--steps", "4", "--warmup-steps", "2",
+                    "--modes", "transformerpp",
+                    "--batch-sizes", str(target_shape["batch_size"]),
+                    "--seq-len", str(target_shape["seq_len"]),
+                    "--vocab-size", str(target_shape["vocab_size"]),
+                    "--dim", str(target_shape["dim"]),
+                    "--layers", str(target_shape["layers"]),
+                    "--heads", str(target_shape["n_heads"]),
+                    "--kv-heads", str(target_shape["n_kv_heads"]),
+                    "--ffn-dim", str(target_shape["ffn_dim"]),
+                    "--steps", "8",
+                    "--warmup-steps", "4",
                     "--compile", "--compile-mode", "max-autotune", "--optimizer", "muon",
                     "--attention-backend", "fa3", "--bitlinear-kernel-backend", "triton_packed",
                     "--bitlinear-wgrad-backend", "deepgemm_fp8",
                     "--fp8-wgrad-roles", "ffn_gate,ffn_up,ffn_down",
+                    "--run-label", "candidate",
                 ],
                 cwd=trial,
                 env=env,
@@ -310,6 +379,7 @@ def evaluate_stage2(program_path: str):
                 "device": torch.cuda.get_device_name(),
                 "device_memory_gb": device_gb,
                 "elapsed_s": time.monotonic() - started,
+                "target_shape": json.dumps(target_shape, sort_keys=True),
                 "static_contracts_tail": contracts[-2000:],
                 "preflight_tail": preflight[-3000:],
                 "throughput": json.dumps(record, sort_keys=True),

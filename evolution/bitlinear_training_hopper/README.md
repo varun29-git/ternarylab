@@ -19,6 +19,20 @@ tests, packing ABI, or precision semantics.
 
 ## Gates and score
 
+## Frozen first target
+
+The first optimization phase is deliberately the 400M H100 profile, not the
+150M development shape and not the future 2.6B run:
+
+`vocab=64,000 (tied), dim=1024, layers=20, ffn_dim=4608, heads=16,
+kv_heads=4, batch=14, seq_len=4096`.
+
+That is 401,122,344 trainable parameters under `src/parameter_report.py`, and
+keeps the required four-local/one-global cadence (16 local, 4 global).
+The evaluator and Azure gate set these public values if absent and reject a
+different value. This prevents a candidate from winning by measuring an easier
+model or the wrong vocabulary size.
+
 1. A patch must be restricted to the BitLinear allowlist and cannot contain
    secret, credential, networking, process-execution, or cloud-metadata code.
 2. The copied candidate passes the complete static contract suite.

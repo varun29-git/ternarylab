@@ -271,6 +271,113 @@ def _packed_ternary_fprop_kernel(
 
 
 @triton.jit
+def _packed_ternary_fprop_kernel_large_k(
+    a_ptr,
+    codes_ptr,
+    scales_ptr,
+    out_ptr,
+    M: tl.constexpr,
+    N: tl.constexpr,
+    K: tl.constexpr,
+    NUM_GROUPS: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    stride_am: tl.constexpr,
+    stride_ak: tl.constexpr,
+    stride_cpk: tl.constexpr,
+    stride_cn: tl.constexpr,
+    stride_sg: tl.constexpr,
+    stride_sn: tl.constexpr,
+    stride_om: tl.constexpr,
+    stride_on: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    GROUP_M: tl.constexpr,
+):
+    """Optimized BF16 x packed-ternary forward for large K (>= 2048).
+
+    For large K dimensions (many groups), this kernel uses larger BLOCK_N to
+    improve memory coalescing and reduce loop overhead per output element.
+    The larger BLOCK_N amortizes the per-group processing cost across more
+    output columns.
+    """
+
+    pid = tl.program_id(0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    programs_per_group = GROUP_M * num_pid_n
+    group_id = pid // programs_per_group
+    first_pid_m = group_id * GROUP_M
+    group_m = tl.minimum(num_pid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + ((pid % programs_per_group) % group_m)
+    pid_n = (pid % programs_per_group) // group_m
+
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_n = tl.max_contiguous(offs_n, BLOCK_N)
+    offs_pack = tl.arange(0, GROUP_SIZE // 4)
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for group in range(0, NUM_GROUPS):
+        packed_k = group * (GROUP_SIZE // 4) + offs_pack
+        packed = tl.load(
+            codes_ptr + packed_k[:, None] * stride_cpk + offs_n[None, :] * stride_cn,
+            mask=offs_n[None, :] < N,
+            other=0,
+        )
+        code0 = packed & 0x03
+        code1 = (packed >> 2) & 0x03
+        code2 = (packed >> 4) & 0x03
+        code3 = (packed >> 6) & 0x03
+        q0 = (code0 & 1).to(tl.float32) - (code0 >> 1).to(tl.float32)
+        q1 = (code1 & 1).to(tl.float32) - (code1 >> 1).to(tl.float32)
+        q2 = (code2 & 1).to(tl.float32) - (code2 >> 1).to(tl.float32)
+        q3 = (code3 & 1).to(tl.float32) - (code3 >> 1).to(tl.float32)
+        scale = tl.load(
+            scales_ptr + group * stride_sg + offs_n * stride_sn,
+            mask=offs_n < N,
+            other=0.0,
+        )
+        w0 = (q0 * scale[None, :]).to(tl.bfloat16)
+        w1 = (q1 * scale[None, :]).to(tl.bfloat16)
+        w2 = (q2 * scale[None, :]).to(tl.bfloat16)
+        w3 = (q3 * scale[None, :]).to(tl.bfloat16)
+
+        base_k = group * GROUP_SIZE + offs_pack * 4
+        mask_m = offs_m[:, None] < M
+        a0 = tl.load(
+            a_ptr + offs_m[:, None] * stride_am + (base_k + 0)[None, :] * stride_ak,
+            mask=mask_m & ((base_k + 0)[None, :] < K),
+            other=0.0,
+        )
+        a1 = tl.load(
+            a_ptr + offs_m[:, None] * stride_am + (base_k + 1)[None, :] * stride_ak,
+            mask=mask_m & ((base_k + 1)[None, :] < K),
+            other=0.0,
+        )
+        a2 = tl.load(
+            a_ptr + offs_m[:, None] * stride_am + (base_k + 2)[None, :] * stride_ak,
+            mask=mask_m & ((base_k + 2)[None, :] < K),
+            other=0.0,
+        )
+        a3 = tl.load(
+            a_ptr + offs_m[:, None] * stride_am + (base_k + 3)[None, :] * stride_ak,
+            mask=mask_m & ((base_k + 3)[None, :] < K),
+            other=0.0,
+        )
+        accumulator += tl.dot(a0, w0, out_dtype=tl.float32)
+        accumulator += tl.dot(a1, w1, out_dtype=tl.float32)
+        accumulator += tl.dot(a2, w2, out_dtype=tl.float32)
+        accumulator += tl.dot(a3, w3, out_dtype=tl.float32)
+
+    out_ptrs = out_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
+    tl.store(
+        out_ptrs,
+        accumulator.to(tl.bfloat16),
+        mask=(offs_m[:, None] < M) & (offs_n[None, :] < N),
+    )
+
+
+@triton.jit
 def _packed_ternary_dgrad_kernel(
     dy_ptr,
     codes_ptr,
@@ -587,32 +694,64 @@ def packed_ternary_fprop(
         )
     else:
         block_m = 64 if m <= 128 else 128
-        block_n = 128
-        grid = (triton.cdiv(m, block_m) * triton.cdiv(n, block_n),)
-        _packed_ternary_fprop_kernel[grid](
-            matrix,
-            codes,
-            scales,
-            output,
-            M=m,
-            N=n,
-            K=k,
-            NUM_GROUPS=groups,
-            GROUP_SIZE=group_size,
-            stride_am=matrix.stride(0),
-            stride_ak=matrix.stride(1),
-            stride_cpk=codes.stride(0),
-            stride_cn=codes.stride(1),
-            stride_sg=scales.stride(0),
-            stride_sn=scales.stride(1),
-            stride_om=output.stride(0),
-            stride_on=output.stride(1),
-            BLOCK_M=block_m,
-            BLOCK_N=block_n,
-            GROUP_M=8,
-            num_warps=8,
-            num_stages=4,
-        )
+        # For large K (>= 2048, i.e., 16+ groups), use larger BLOCK_N to amortize
+        # per-group processing cost and improve memory coalescing.
+        # This is critical for ffn_down which has K=4096 vs ffn_gate/up K=1024.
+        if k >= 2048 and n >= 64:
+            # Use larger BLOCK_N for large K to reduce loop overhead per output
+            block_n = min(256, triton.next_power_of_2(n))
+            grid = (triton.cdiv(m, block_m) * triton.cdiv(n, block_n),)
+            _packed_ternary_fprop_kernel_large_k[grid](
+                matrix,
+                codes,
+                scales,
+                output,
+                M=m,
+                N=n,
+                K=k,
+                NUM_GROUPS=groups,
+                GROUP_SIZE=group_size,
+                stride_am=matrix.stride(0),
+                stride_ak=matrix.stride(1),
+                stride_cpk=codes.stride(0),
+                stride_cn=codes.stride(1),
+                stride_sg=scales.stride(0),
+                stride_sn=scales.stride(1),
+                stride_om=output.stride(0),
+                stride_on=output.stride(1),
+                BLOCK_M=block_m,
+                BLOCK_N=block_n,
+                GROUP_M=8,
+                num_warps=8,
+                num_stages=4,
+            )
+        else:
+            block_n = 128
+            grid = (triton.cdiv(m, block_m) * triton.cdiv(n, block_n),)
+            _packed_ternary_fprop_kernel[grid](
+                matrix,
+                codes,
+                scales,
+                output,
+                M=m,
+                N=n,
+                K=k,
+                NUM_GROUPS=groups,
+                GROUP_SIZE=group_size,
+                stride_am=matrix.stride(0),
+                stride_ak=matrix.stride(1),
+                stride_cpk=codes.stride(0),
+                stride_cn=codes.stride(1),
+                stride_sg=scales.stride(0),
+                stride_sn=scales.stride(1),
+                stride_om=output.stride(0),
+                stride_on=output.stride(1),
+                BLOCK_M=block_m,
+                BLOCK_N=block_n,
+                GROUP_M=8,
+                num_warps=8,
+                num_stages=4,
+            )
     return output.reshape(*original_shape[:-1], n)
 
 

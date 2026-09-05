@@ -294,26 +294,31 @@ class BitLinear(nn.Module):
         if alpha_scale is None:
             alpha_scale = self.alpha_scale()
         absmean = alpha_scale.clamp_min(self.eps)
-        return torch.round(weight / absmean).clamp_(-1, 1)
+        return torch.round(weight / absmean).clamp_(-1, 1).to(torch.float8_e4m3fn)
 
     def integer_weight(self) -> torch.Tensor:
         ternary = self.ternary_weight()
         latent = self.weight.float()
-        return latent + (ternary - latent).detach()
+        return latent + (ternary.to(dtype=latent.dtype) - latent).detach()
 
     def quantized_weight(self) -> torch.Tensor:
         latent = self.weight.float()
         alpha_scale = self.alpha_scale()
         ternary = self.ternary_weight(alpha_scale)
-        quantized_target = alpha_scale * ternary
+        quantized_target = alpha_scale * ternary.to(dtype=latent.dtype)
+        quantized_target_fp8 = quantized_target.to(torch.float8_e4m3fn).to(dtype=latent.dtype)
 
         # Straight-Through Estimator (STE)
-        bitnet_weight = latent + (quantized_target - latent).detach()
+        bitnet_weight = latent + (quantized_target_fp8 - latent).detach()
 
         if self._quantization_strength >= 1.0:
             return bitnet_weight
         strength = self.quantization_strength.to(device=latent.device, dtype=latent.dtype)
         return torch.lerp(latent, bitnet_weight, strength)
+
+    def fp8_weight(self) -> torch.Tensor:
+        """Return the effective quantized weight matrix in native torch.float8_e4m3fn."""
+        return self.quantized_weight().to(torch.float8_e4m3fn)
 
     def quantized_activation(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x_float = x.float()

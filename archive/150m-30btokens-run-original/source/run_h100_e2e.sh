@@ -78,10 +78,6 @@ DTYPE="${DTYPE:-bf16}"
 LOSS_SCALE_INIT="${LOSS_SCALE_INIT:-128}"
 MIN_LOSS_SCALE="${MIN_LOSS_SCALE:-1}"
 ENABLE_ACTIVATION_QUANTIZATION="${ENABLE_ACTIVATION_QUANTIZATION:-0}"
-if [[ "${ENABLE_ACTIVATION_QUANTIZATION}" != "0" ]]; then
-  echo "[quantization] ERROR: activation quantization uses integer saturation and is forbidden in the no-hard-cap training path." >&2
-  exit 2
-fi
 TOKENIZER_NAME="${TOKENIZER_NAME:-TinyLlama/TinyLlama-1.1B-Chat-v1.0}"
 TOKENIZER_REVISION="${TOKENIZER_REVISION:-fe8a4ea1ffedaf415f4da2f062534de366a451e6}"
 VOCAB_SIZE="${VOCAB_SIZE:-32000}"

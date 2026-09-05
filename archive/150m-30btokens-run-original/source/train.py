@@ -3050,8 +3050,6 @@ def validate_train_config(config: TrainConfig) -> None:
             raise ValueError(f"{name} must be positive")
     if config.grad_clip != 0.0 or config.alpha_grad_clip != 0.0:
         raise ValueError("hard gradient clipping is forbidden; both clip values must be 0")
-    if config.quantize_activations:
-        raise ValueError("activation quantization is forbidden; it uses integer saturation")
 
 
 def quantization_strength_for_step(step: int, config: TrainConfig) -> float:

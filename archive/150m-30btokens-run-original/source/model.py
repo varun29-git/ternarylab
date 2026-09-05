@@ -84,7 +84,6 @@ class BitNetLlamaConfig:
     rope_theta: float = 10_000.0
     dropout: float = 0.0
     pad_token_id: Optional[int] = 0
-    activation_bits: int = 8
     weight_init: str = "orthogonal"
     alpha_group_size: int = 128
     attention_backend: str = "fa3"
@@ -108,8 +107,6 @@ class BitNetLlamaConfig:
             raise ValueError("max_seq_len must be positive")
         if self.ffn_dim <= 0:
             raise ValueError("ffn_dim must be positive")
-        if self.activation_bits < 2:
-            raise ValueError("activation_bits must be at least 2")
         if self.weight_init not in {"orthogonal", "normal"}:
             raise ValueError("weight_init must be 'orthogonal' or 'normal'")
         if self.alpha_group_size <= 0:
@@ -196,8 +193,73 @@ class SingleScaleRMSNorm(nn.Module):
         return (normed * self.weight.float()).to(dtype=dtype)
 
 
+FP8_E4M3_MAX = 448.0
+
+
+def quantize_activation_fp8_e4m3(
+    x: torch.Tensor,
+    block_size: int = 128,
+    eps: float = 1e-5,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Quantize activation tensor to FP8 E4M3 with fine-grained 1x128 block-wise dynamic scaling.
+
+    Args:
+        x: Input tensor of shape [..., K].
+        block_size: Group size along the channel dimension K (default: 128).
+        eps: Epsilon floor for numerical stability.
+
+    Returns:
+        x_fp8: Quantized tensor of shape [..., K] in torch.float8_e4m3fn.
+        scale: FP32 scale factors of shape [..., ceil(K / block_size)].
+    """
+    orig_shape = x.shape
+    k = orig_shape[-1]
+    groups = (k + block_size - 1) // block_size
+    padded_k = groups * block_size
+
+    x_float = x.float()
+    if padded_k != k:
+        x_float = F.pad(x_float, (0, padded_k - k))
+
+    reshaped = x_float.view(*orig_shape[:-1], groups, block_size)
+    amax = reshaped.abs().amax(dim=-1, keepdim=True).clamp_min(eps)
+    scale = amax / FP8_E4M3_MAX
+
+    scaled = reshaped / scale
+    clamped = scaled.clamp(-FP8_E4M3_MAX, FP8_E4M3_MAX)
+    x_fp8_blocked = clamped.to(torch.float8_e4m3fn)
+
+    x_fp8 = x_fp8_blocked.view(*orig_shape[:-1], padded_k)[..., :k]
+    return x_fp8, scale.squeeze(-1)
+
+
+def dequantize_activation_fp8_e4m3(
+    x_fp8: torch.Tensor,
+    scale: torch.Tensor,
+    block_size: int = 128,
+    out_dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """Dequantize FP8 E4M3 activations back to high precision with 1x128 block scaling."""
+    orig_shape = x_fp8.shape
+    k = orig_shape[-1]
+    groups = (k + block_size - 1) // block_size
+    padded_k = groups * block_size
+
+    x_fp8_float = x_fp8.float()
+    if padded_k != k:
+        x_fp8_float = F.pad(x_fp8_float, (0, padded_k - k))
+
+    reshaped = x_fp8_float.view(*orig_shape[:-1], groups, block_size)
+    scale_expanded = scale.unsqueeze(-1)
+    dequant = reshaped * scale_expanded
+    res = dequant.view(*orig_shape[:-1], padded_k)[..., :k]
+    if out_dtype is not None:
+        res = res.to(dtype=out_dtype)
+    return res
+
+
 class BitLinear(nn.Module):
-    """BitNet 1.58b linear layer with deterministic grouped absmean alpha (group size 128)."""
+    """BitNet 1.58b linear layer with deterministic grouped absmean alpha (group size 128) and FP8 E4M3 activation quantization."""
 
     def __init__(
         self,
@@ -205,7 +267,6 @@ class BitLinear(nn.Module):
         out_features: int,
         *,
         eps: float = 1e-6,
-        activation_bits: int = 8,
         weight_init: str = "orthogonal",
         alpha_group_size: int = 128,
         quantization_strength: float = 1.0,
@@ -213,8 +274,6 @@ class BitLinear(nn.Module):
         init_scale: float = 1.0,
     ) -> None:
         super().__init__()
-        if activation_bits < 2:
-            raise ValueError("activation_bits must be at least 2")
         if weight_init not in {"orthogonal", "normal"}:
             raise ValueError("weight_init must be 'orthogonal' or 'normal'")
         if alpha_group_size <= 0:
@@ -227,8 +286,6 @@ class BitLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.eps = eps
-        self.activation_bits = activation_bits
-        self.activation_qmax = float(2 ** (activation_bits - 1) - 1)
         self.weight_init = weight_init
         self.alpha_group_size = int(alpha_group_size)
         self.init_scale = init_scale
@@ -321,17 +378,24 @@ class BitLinear(nn.Module):
         return self.quantized_weight().to(torch.float8_e4m3fn)
 
     def quantized_activation(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_float = x.float()
-        absmax = x_float.abs().amax(dim=-1, keepdim=True).clamp_min(self.eps)
-        scale = absmax / self.activation_qmax
-        x_int = torch.round(x_float / scale).clamp(-self.activation_qmax, self.activation_qmax)
-        x_dequant = x_int * scale
-        x_ste = x_float + (x_dequant - x_float).detach()
+        """Quantize activation to FP8 E4M3 with 1x128 block scaling and Straight-Through Estimator (STE)."""
+        x_fp8, scale = quantize_activation_fp8_e4m3(
+            x, block_size=self.alpha_group_size, eps=self.eps
+        )
+        x_dequant = dequantize_activation_fp8_e4m3(
+            x_fp8, scale, block_size=self.alpha_group_size, out_dtype=x.dtype
+        )
+        # Straight-Through Estimator (STE)
+        x_ste = x + (x_dequant - x).detach()
         if self._quantization_strength >= 1.0:
-            return x_ste.to(dtype=x.dtype), scale
-        strength = self.quantization_strength.to(device=x.device, dtype=torch.float32)
-        x_quant = torch.lerp(x_float, x_ste, strength)
-        return x_quant.to(dtype=x.dtype), scale
+            return x_ste, scale
+        strength = self.quantization_strength.to(device=x.device, dtype=x.dtype)
+        x_quant = torch.lerp(x, x_ste, strength)
+        return x_quant, scale
+
+    def fp8_activation(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Return the activation tensor in native torch.float8_e4m3fn and its block scale."""
+        return quantize_activation_fp8_e4m3(x, block_size=self.alpha_group_size, eps=self.eps)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantize_activations:
@@ -456,7 +520,6 @@ class BitNetAttention(nn.Module):
         self.q_proj = BitLinear(
             config.dim,
             config.n_heads * self.head_dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -465,7 +528,6 @@ class BitNetAttention(nn.Module):
         self.k_proj = BitLinear(
             config.dim,
             config.n_kv_heads * self.head_dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -474,7 +536,6 @@ class BitNetAttention(nn.Module):
         self.v_proj = BitLinear(
             config.dim,
             config.n_kv_heads * self.head_dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -483,7 +544,6 @@ class BitNetAttention(nn.Module):
         self.o_proj = BitLinear(
             config.n_heads * self.head_dim,
             config.dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -666,7 +726,6 @@ class BitNetFeedForward(nn.Module):
             self.gate_proj = BitLinear(
                 config.dim,
                 config.ffn_dim,
-                activation_bits=config.activation_bits,
                 weight_init=config.weight_init,
                 alpha_group_size=config.alpha_group_size,
                 quantization_strength=config.quantization_strength,
@@ -675,7 +734,6 @@ class BitNetFeedForward(nn.Module):
         self.up_proj = BitLinear(
             config.dim,
             config.ffn_dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -684,7 +742,6 @@ class BitNetFeedForward(nn.Module):
         self.down_proj = BitLinear(
             config.ffn_dim,
             config.dim,
-            activation_bits=config.activation_bits,
             weight_init=config.weight_init,
             alpha_group_size=config.alpha_group_size,
             quantization_strength=config.quantization_strength,
@@ -1019,14 +1076,14 @@ class BitNetLlama(nn.Module):
     def ternary_weight_histogram(self) -> Dict[int, int]:
         hist = {-1: 0, 0: 0, 1: 0}
         for module in self.bitlinear_modules():
-            values, counts = module.ternary_weight().to(torch.int8).unique(return_counts=True)
+            values, counts = module.ternary_weight().int().unique(return_counts=True)
             for value, count in zip(values.tolist(), counts.tolist()):
                 hist[int(value)] = hist.get(int(value), 0) + int(count)
         return hist
 
     @torch.no_grad()
     def ternary_weight_snapshot(self) -> List[torch.Tensor]:
-        return [module.ternary_weight().to(torch.int8).detach().cpu() for module in self.bitlinear_modules()]
+        return [module.ternary_weight().int().detach().cpu() for module in self.bitlinear_modules()]
 
     @torch.no_grad()
     def weight_flip_report(
@@ -1036,7 +1093,7 @@ class BitNetLlama(nn.Module):
         top_k: int = 5,
     ) -> Tuple[Dict[str, object], List[torch.Tensor]]:
         named_modules = list(self.bitlinear_named_modules())
-        current = [module.ternary_weight().to(torch.int8).detach().cpu() for _, module in named_modules]
+        current = [module.ternary_weight().int().detach().cpu() for _, module in named_modules]
         if len(current) != len(previous_snapshot):
             raise ValueError("snapshot does not match current BitLinear module count")
         changed = 0

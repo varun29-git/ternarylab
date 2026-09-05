@@ -18,8 +18,6 @@
   "use_subln": true,
   "ffn_activation": "swiglu",
   "use_embedding_projection": false,
-  "quantize_activations": false,
-  "loss_chunk_size": 16384,
   "quantization_strength": 1.0,
   "residual_init_scale": 1.0,
   "gradient_checkpointing": false,

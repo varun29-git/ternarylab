@@ -92,7 +92,6 @@ class BitNetLlamaConfig:
     ffn_activation: str = "swiglu"
     use_embedding_projection: bool = False
     quantize_activations: bool = False
-    loss_chunk_size: int = 0
     quantization_strength: float = 1.0
     residual_init_scale: float = 1.0
     gradient_checkpointing: bool = False
@@ -119,8 +118,6 @@ class BitNetLlamaConfig:
             raise ValueError(
                 "attention_backend must be 'fa3', 'flex', or explicit test-only 'sdpa_reference'"
             )
-        if self.loss_chunk_size < 0:
-            raise ValueError("loss_chunk_size must be non-negative")
         if not 0.0 <= self.quantization_strength <= 1.0:
             raise ValueError("quantization_strength must be in [0, 1]")
         if self.residual_init_scale <= 0.0:
@@ -823,18 +820,22 @@ class BitNetLlama(nn.Module):
         x = self.embed_rot_out(self.norm(x))
         activation_stats = activation_health_stats(x) if return_activation_stats else None
 
-        logits = (
-            F.linear(x, self.tok_embeddings.weight)
-            if return_logits or targets is None or self.config.loss_chunk_size == 0
-            else None
-        )
+        logits = F.linear(x, self.tok_embeddings.weight)
         loss = None
         loss_tokens = None
         if targets is not None:
             loss_targets = targets
             if attention_mask is not None and attention_mask.ndim == 2:
                 loss_targets = targets.masked_fill(~attention_mask.to(torch.bool), -100)
-            loss, loss_tokens = self._language_model_loss(x, loss_targets, logits)
+            flat_targets = loss_targets.reshape(-1)
+            loss_tokens = flat_targets.ne(-100).sum()
+            loss_sum = F.cross_entropy(
+                logits.reshape(-1, self.config.vocab_size).float(),
+                flat_targets,
+                ignore_index=-100,
+                reduction="sum",
+            )
+            loss = loss_sum / loss_tokens.clamp_min(1)
 
         return {
             "loss": loss,
@@ -890,38 +891,6 @@ class BitNetLlama(nn.Module):
             },
             cache,
         )
-
-    def _language_model_loss(
-        self,
-        hidden: torch.Tensor,
-        targets: torch.Tensor,
-        logits: Optional[torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        flat_targets = targets.reshape(-1)
-        loss_tokens = flat_targets.ne(-100).sum()
-        loss_denominator = loss_tokens.clamp_min(1)
-        if logits is not None:
-            loss_sum = F.cross_entropy(
-                logits.reshape(-1, self.config.vocab_size).float(),
-                flat_targets,
-                ignore_index=-100,
-                reduction="sum",
-            )
-            return loss_sum / loss_denominator, loss_tokens
-        flat_hidden = hidden.reshape(-1, self.config.dim)
-        loss_sum = torch.zeros((), device=hidden.device, dtype=torch.float32)
-        chunk_size = min(self.config.loss_chunk_size, flat_hidden.shape[0])
-        for start in range(0, flat_hidden.shape[0], chunk_size):
-            end = min(start + chunk_size, flat_hidden.shape[0])
-            chunk_targets = flat_targets[start:end]
-            chunk_logits = F.linear(flat_hidden[start:end], self.tok_embeddings.weight).float()
-            loss_sum = loss_sum + F.cross_entropy(
-                chunk_logits,
-                chunk_targets,
-                ignore_index=-100,
-                reduction="sum",
-            )
-        return loss_sum / loss_denominator, loss_tokens
 
     def bitlinear_modules(self) -> Iterable[BitLinear]:
         for module in self.modules():

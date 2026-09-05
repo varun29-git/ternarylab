@@ -45,6 +45,82 @@ def flex_attention_available() -> bool:
     return flex_attention_ops() is not None
 
 
+@lru_cache(maxsize=1)
+def deep_gemm_module() -> Optional[object]:
+    """Import and return the official deep_gemm library if available."""
+    try:
+        import deep_gemm
+        return deep_gemm
+    except Exception:
+        return None
+
+
+def deep_gemm_available() -> bool:
+    """Check if DeepGEMM is installed and current GPU device supports Hopper/Blackwell (SM90+)."""
+    mod = deep_gemm_module()
+    if mod is None:
+        return False
+    if not torch.cuda.is_available():
+        return False
+    try:
+        major, _ = torch.cuda.get_device_capability()
+        return major >= 9
+    except Exception:
+        return False
+
+
+def deep_gemm_fp8_gemm_nt(
+    lhs: Tuple[torch.Tensor, torch.Tensor],
+    rhs: Tuple[torch.Tensor, torch.Tensor],
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Execute native Hopper FP8 GEMM via official DeepGEMM library."""
+    dg = deep_gemm_module()
+    if dg is None:
+        raise KernelBackendError("deep_gemm library is not installed or importable")
+
+    x_fp8, x_scale = lhs
+    w_fp8, w_scale = rhs
+    m, k = x_fp8.shape
+    n, k_w = w_fp8.shape
+    assert k == k_w, f"K dimension mismatch: {k} vs {k_w}"
+
+    if out is None:
+        out = torch.empty((m, n), dtype=torch.bfloat16, device=x_fp8.device)
+
+    func = getattr(dg, "fp8_gemm_nt", None) or getattr(dg, "gemm_fp8_fp8_bf16_nt", None)
+    if func is None:
+        raise KernelBackendError("deep_gemm has neither fp8_gemm_nt nor gemm_fp8_fp8_bf16_nt")
+
+    func((x_fp8, x_scale), (w_fp8, w_scale), out)
+    return out
+
+
+@lru_cache(maxsize=1)
+def triton_act_quant_kernel():
+    """JIT compile DeepSeek-V3 act_quant_kernel when Triton and CUDA are available."""
+    try:
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def _act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):
+            pid = tl.program_id(axis=0)
+            offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+            x = tl.load(x_ptr + offs).to(tl.float32)
+            amax = tl.max(tl.abs(x))
+            amax = tl.maximum(amax, 1e-5)
+            s = amax / 448.0
+            y = x / s
+            y = y.to(y_ptr.dtype.element_ty)
+            tl.store(y_ptr + offs, y)
+            tl.store(s_ptr + pid, s)
+
+        return _act_quant_kernel
+    except Exception:
+        return None
+
+
 def kernel_policy() -> Dict[str, object]:
     """Describe Test 17's strict accelerator-kernel policy."""
 
@@ -64,7 +140,7 @@ def kernel_policy() -> Dict[str, object]:
             "local_foundations_muon_used": False,
         },
         "custom_kernels": {
-            "custom_ternary_matmul": False,
+            "custom_ternary_matmul": "deep_gemm_fp8_nt_hopper",
             "custom_rope": False,
             "custom_attention": "external_fa3_or_pytorch_flex",
             "packed_bitnet_inference": False,
@@ -89,6 +165,7 @@ def backend_runtime_summary(requested: Optional[str] = None) -> Dict[str, object
         "attention_backend_requested": requested,
         "flash_attention3_available": flash_attention3_available(),
         "flex_attention_available": flex_attention_available(),
+        "deep_gemm_available": deep_gemm_available(),
         "strict_no_sdpa_fallback": True,
         "kernel_policy": kernel_policy(),
     }

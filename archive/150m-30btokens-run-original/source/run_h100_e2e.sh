@@ -532,7 +532,10 @@ if [[ "${SKIP_INSTALL}" != "1" ]]; then
   python -m pip install -q --no-deps "${FLA_CORE_SPEC}" "${FLASH_LINEAR_ATTENTION_SPEC}" "${TILELANG_SPEC}"
   python -m pip install -q --no-deps \
     "muon-optimizer @ git+https://github.com/KellerJordan/Muon.git@${MUON_EXPECTED_COMMIT}"
+  python -m pip install -q "git+https://github.com/deepseek-ai/DeepGEMM.git"
 fi
+export DG_JIT_USE_NVRTC="${DG_JIT_USE_NVRTC:-1}"
+export DG_JIT_DEBUG="${DG_JIT_DEBUG:-0}"
 python - "${MUON_EXPECTED_COMMIT}" <<'PY'
 import json
 from importlib import metadata

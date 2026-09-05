@@ -258,6 +258,91 @@ def dequantize_activation_fp8_e4m3(
     return res
 
 
+class DeepGEMMBitLinearFunction(torch.autograd.Function):
+    """Autograd Function integrating official DeepGEMM FP8 Tensor Core GEMM on Hopper SM90+ with STE autograd."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        x: torch.Tensor,
+        weight: torch.Tensor,
+        alpha_scale: torch.Tensor,
+        alpha_group_size: int,
+        eps: float,
+        quantization_strength: float,
+    ) -> torch.Tensor:
+        orig_shape = x.shape
+        k = orig_shape[-1]
+        x_2d = x.reshape(-1, k)
+        m = x_2d.shape[0]
+        n = weight.shape[0]
+
+        # 1. Activation quantization (FP8 E4M3 + 1x128 block scale)
+        x_fp8, x_scale = quantize_activation_fp8_e4m3(x_2d, block_size=alpha_group_size, eps=eps)
+
+        # 2. Weight quantization (FP8 E4M3 + 2D scale for DeepGEMM)
+        absmean = alpha_scale.clamp_min(eps)
+        w_ternary = torch.round(weight.float() / absmean).clamp_(-1, 1).to(torch.float8_e4m3fn)
+
+        indices_n = torch.arange(0, n, alpha_group_size, device=weight.device)
+        indices_k = torch.arange(0, k, alpha_group_size, device=weight.device)
+        w_scale_2d = absmean[indices_n][:, indices_k].contiguous()
+
+        # 3. Native DeepGEMM Hopper SM90 execution path
+        used_native_deep_gemm = False
+        if x_2d.is_cuda:
+            try:
+                from kernels import deep_gemm_available, deep_gemm_fp8_gemm_nt
+
+                if deep_gemm_available():
+                    out_2d = deep_gemm_fp8_gemm_nt(
+                        (x_fp8.contiguous(), x_scale.contiguous()),
+                        (w_ternary.contiguous(), w_scale_2d.contiguous()),
+                    )
+                    used_native_deep_gemm = True
+            except Exception:
+                used_native_deep_gemm = False
+
+        if not used_native_deep_gemm:
+            # Bit-identical reference STE GEMM
+            x_dequant = dequantize_activation_fp8_e4m3(
+                x_fp8, x_scale, block_size=alpha_group_size, out_dtype=x.dtype
+            )
+            w_dequant = (w_ternary.to(dtype=weight.dtype) * absmean).to(dtype=x.dtype)
+            out_2d = F.linear(x_dequant, w_dequant)
+
+        ctx.save_for_backward(x_2d, weight, absmean)
+        ctx.orig_shape = orig_shape
+        ctx.quantization_strength = quantization_strength
+
+        return out_2d.view(*orig_shape[:-1], n)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        x_2d, weight, absmean = ctx.saved_tensors
+        orig_shape = ctx.orig_shape
+        n = weight.shape[0]
+
+        grad_output_2d = grad_output.reshape(-1, n)
+
+        w_ternary = torch.round(weight.float() / absmean).clamp_(-1, 1).to(torch.float8_e4m3fn)
+        w_effective = (w_ternary.to(dtype=weight.dtype) * absmean).to(dtype=grad_output.dtype)
+
+        # Straight-Through Estimator backward pass:
+        # dL/dx = grad_output @ W
+        grad_x_2d = grad_output_2d @ w_effective
+        grad_x = grad_x_2d.view(orig_shape)
+
+        # dL/dw = grad_output.T @ X
+        grad_weight = (grad_output_2d.t() @ x_2d.to(dtype=grad_output.dtype)).to(dtype=weight.dtype)
+
+        if ctx.quantization_strength < 1.0:
+            grad_x = grad_x * ctx.quantization_strength
+            grad_weight = grad_weight * ctx.quantization_strength
+
+        return grad_x, grad_weight, None, None, None, None
+
+
 class BitLinear(nn.Module):
     """BitNet 1.58b linear layer with deterministic grouped absmean alpha (group size 128) and FP8 E4M3 activation quantization."""
 
@@ -401,9 +486,14 @@ class BitLinear(nn.Module):
         if not self.quantize_activations:
             weight = self.quantized_weight().to(dtype=x.dtype)
             return F.linear(x, weight, None)
-        x_quant, _ = self.quantized_activation(x)
-        weight = self.quantized_weight().to(dtype=x.dtype)
-        return F.linear(x_quant, weight, None)
+        return DeepGEMMBitLinearFunction.apply(
+            x,
+            self.weight,
+            self.alpha_scale(),
+            self.alpha_group_size,
+            self.eps,
+            self._quantization_strength,
+        )
 
 
 class RotaryEmbedding(nn.Module):

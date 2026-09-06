@@ -1,3 +1,5 @@
+> **Historical / superseded:** This research or planning document is not the supported training specification. Its architectural, tokenizer, scaling and performance claims are not release guarantees. Use `README.md` and `reports/PRETRAINING_AUDIT.md` at the repository root for the maintained implementation, measured evidence and outstanding launch gates.
+
 # DeepGEMM Activation Quantization & BitNet FP8 Integration Research Report
 
 **Author:** Terminus Research & Engineering  

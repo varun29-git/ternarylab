@@ -1,0 +1,29 @@
+{
+  "model": {
+    "vocab_size": 128,
+    "dim": 64,
+    "n_layers": 2,
+    "n_heads": 4,
+    "n_kv_heads": 2,
+    "ffn_dim": 128,
+    "max_seq_len": 32,
+    "local_attention_window": 8,
+    "global_attention_every": 2,
+    "attention_backend": "sdpa_reference",
+    "loss_chunk_size": 16
+  },
+  "training": {
+    "device": "cpu",
+    "dtype": "fp32",
+    "development_mode": true,
+    "gradient_accumulation_steps": 2,
+    "log_interval": 1,
+    "validation_interval": 5,
+    "checkpoint_interval": 5
+  },
+  "optimizer": {
+    "kind": "adamw",
+    "adamw_lr": 0.0003,
+    "norm_lr": 0.0001
+  }
+}

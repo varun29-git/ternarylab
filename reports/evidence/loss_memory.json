@@ -1,0 +1,25 @@
+{
+  "cases": {
+    "chunked": {
+      "forward_backward_seconds": 0.7700370410020696,
+      "loss": 41965.00390625,
+      "retained_extra_forward_storage_bytes": 0
+    },
+    "full": {
+      "forward_backward_seconds": 0.17536524999741232,
+      "loss": 41965.0,
+      "retained_extra_forward_storage_bytes": 16777220
+    }
+  },
+  "chunk_size": 64,
+  "device": "cpu",
+  "max_gradient_absolute_errors": [
+    0.0,
+    1.430511474609375e-06
+  ],
+  "scope": "Unique extra tensor storage retained by autograd after the loss forward, excluding shared inputs/weights/targets; NOT peak process/GPU memory. Chunked backward recomputes logits and trades compute for retention.",
+  "tokens": 1024,
+  "torch": "2.13.0",
+  "vocabulary": 4096,
+  "width": 128
+}

@@ -1,0 +1,48 @@
+{
+  "active_behavior": {
+    "cached_vs_full_max_absolute_error": 1.5497207641601562e-06,
+    "masked_key_leak_max_absolute_error": 0.0
+  },
+  "archive_lock_drift": {
+    "configs/model_config.json": {
+      "actual": "7a27a856f5ee3895944c750b4d47ac9c882aa78666e9095ac4232942187f7110",
+      "recorded": "0c7b083580abf083bf97db82db2af4cbd93ccd51737f061e37d4705e444c5e00"
+    },
+    "configs/train_config.json": {
+      "actual": "4a4b5ee93baeff515e0c2256ba334db0f78e903d0841de1dee8cbc2804a944a0",
+      "recorded": "8a189ae3f11d7f8798cb0d686e0fade352fff3c91be09dd64b9e59967b4b418d"
+    },
+    "source/kernels.py": {
+      "actual": "10aa4ad3234e507bdbfc5bf9fb6d9a1f6bf68476e24677716deb8df8077f5c7a",
+      "recorded": "1046c5470a08648f616df8e38cbba47638e33de0b07710d5f3f7377aa082f647"
+    },
+    "source/model.py": {
+      "actual": "a6314a85515f85376dfa8fd7b69d27c5052fdfcdede276ecf592346d5acbb07f",
+      "recorded": "9387fbf0bc773e9f57fc9ea0783be247ba549cc66e6df644fae6c61bb092fdfb"
+    },
+    "source/run_h100_e2e.sh": {
+      "actual": "87cb727c1ab23925bccc29fb946e390e24b4fc23b8b1db23f6b9d8d07abe69a4",
+      "recorded": "d2a86e23d9f1fba367861df87605058abfdaeb66931a945993b18a46e62f3e77"
+    },
+    "source/train.py": {
+      "actual": "61fab65fcbefedcd18d6d8e26321c7d45b5c0cc6f78fd2d3d26d1ae57bf1152b",
+      "recorded": "656013fd446331303c88af140ab95ea624067127bec5c49bae161e37ebf96e77"
+    }
+  },
+  "archived_behavior": {
+    "cached_vs_full_max_absolute_error": 2.1161904335021973,
+    "masked_key_leak_max_absolute_error": 2.5787713527679443
+  },
+  "archived_default_training_config_error": "AttributeError: 'TrainConfig' object has no attribute 'loss_chunk_size'",
+  "archived_fp8_ste_weight_gradient_max_absolute_error": 0.09304475784301758,
+  "archived_partial_block_scales_for_uniform_point_one": [
+    [
+      0.07500000298023224,
+      0.01875000074505806
+    ]
+  ],
+  "date": "2026-09-06",
+  "device": "cpu",
+  "scope": "Deterministic local numerical reproductions, not an archived checkpoint evaluation or a CUDA benchmark. The archive is read, never modified.",
+  "torch": "2.13.0"
+}

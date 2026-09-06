@@ -1,3 +1,5 @@
+> **Historical / superseded:** This research or planning document is not the supported training specification. Its architectural, tokenizer, scaling and performance claims are not release guarantees. Use `README.md` and `reports/PRETRAINING_AUDIT.md` at the repository root for the maintained implementation, measured evidence and outstanding launch gates.
+
 # Compute Allocation & 8,000 GPU-Hour Budget Calculation
 ## 1.5B Parameter Multilingual LLM Training on 32× H100 Cluster
 

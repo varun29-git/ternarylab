@@ -1,0 +1,8 @@
+{
+  "adamw_fp32_training_state_bytes_excluding_activations": 24035361728,
+  "fp32_weights_and_gradients_bytes": 12017680864,
+  "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional.",
+  "ternary": 1305477120,
+  "total": 1502210108,
+  "unquantized": 196732988
+}

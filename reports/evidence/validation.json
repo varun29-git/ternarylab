@@ -1,0 +1,96 @@
+{
+  "checks": {
+    "archive_generated_bytecode_removed": true,
+    "archive_tracked_files_unchanged": true,
+    "compileall": "passed",
+    "editable_install": "passed",
+    "git_diff_check": "passed",
+    "pip_check": "passed: no broken requirements",
+    "shell_syntax": "passed"
+  },
+  "date": "2026-09-06",
+  "decision": "NO_GO_FINAL_1_5B_RUN__CONTROLLED_ACCEPTANCE_PILOT_ONLY",
+  "environment": {
+    "cuda_available": false,
+    "machine": "arm64",
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "protobuf": "6.33.6",
+    "python": "3.14.5 (main, May 10 2026, 10:21:34) [Clang 21.0.0 (clang-2100.0.123.102)]",
+    "runtime": {
+      "capability": null,
+      "cuda": null,
+      "device": "cpu",
+      "gpu": null,
+      "native_sources": {
+        "deep_gemm": null,
+        "flash_attn_3_cuda": null,
+        "flash_attn_interface": null,
+        "muon": null,
+        "triton": null
+      },
+      "packages": {
+        "deep-gemm": null,
+        "flash-attn": null,
+        "muon-optimizer": null,
+        "numpy": "2.5.1",
+        "sentencepiece": "0.2.1",
+        "triton": null
+      },
+      "python": "3.14.5",
+      "torch": "2.13.0"
+    }
+  },
+  "git_base_commit": "12df9b353704b091f81e06b4ebb30617bf8eb9bd",
+  "not_performed": [
+    "actual CUDA kernel execution",
+    "full 1.5B optimizer allocation",
+    "NCCL or multi-node training",
+    "long-duration real-data stability/throughput pilot",
+    "real 96k tokenizer quality evaluation",
+    "native-language task evaluation",
+    "independent off-host disaster recovery"
+  ],
+  "reproduction_script_sha256": "7e2a5b89eb505fd2f99ca7aa8ee011f16983fb333012ad156ffa101f29dd5f13",
+  "source": {
+    "__init__.py": "065c7c7cc0b00a4777b7a42d86e522a667f106cc71c75d4e762f5a88a568602e",
+    "benchmark.py": "fb60965386201a390b071f32f1ab411ca59249e6f929c35d642b651502588b8b",
+    "checkpoint.py": "e294ead4a3a83fd82684c0bb29ca555bc4c36c15a24a22dc9a102e64e0015130",
+    "data.py": "05fa8375a2cffd53dfa4f61df8dffeefcfc97f7bf5db02e7d7d748f99c68ab6e",
+    "generate.py": "4291a34a0c05c399e85d117b3930bc922a2ee18d24cdb38a1e1f5c5a6f2da526",
+    "integrity.py": "3ed531f466850b125cedc21d5a568817e0784a933d4f7da867556966585cf1f7",
+    "kernels.py": "573f386a472305f93598c4c4a23f48b474a9a8fffd3e45c653563c54cac4f504",
+    "model.py": "ebf474c1e4e7dd9e144c26f566fd09a59b239b5226cc83fd36878b8876d2f4c9",
+    "optim.py": "5d058ff61cfe604d3212207a4ea8baccd01c690b14ba60634ef008ab789da811",
+    "preflight.py": "aba7cb9a845aafc7c26acb83a136783e70566b7fc9881063de8c38f792423606",
+    "prepare_data.py": "ebc477c02de1e2d5671d3ee9b00156434228a97dabad3689bb27801d9acb4db5",
+    "quantization.py": "9a162e42f8e7dcf142fa33fdd44737fff229f5eed7348af4f1459a161a027027",
+    "tokenizer.py": "1d66fa9e57764204a2feafee897b44dfe07ce22388e950053f3703ee3faa2d20",
+    "train.py": "bac652ad6094e5ec50f12cf0904d3ca60b652bcba3e9a41b74fab01054e1af13"
+  },
+  "test_sources": {
+    "tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/helpers.py": "741c504a73226d014d1fd6e0b1598f7ad97c042cb1eb08ce338f0012dde68ecc",
+    "tests/test_data.py": "39a58da6c9dad8c671f10c84af8d354c72670e2dcb9d2f14f74ef031c5c5b4d9",
+    "tests/test_gpu.py": "a72bf5e88cf96a46a4b6c08fa4f76481ba3e2114493c89bc0fe06806dae0fa84",
+    "tests/test_model.py": "6072792f2ea6e2679ec1b1c04149ed2d0c1325730ad3d27934f6594fa5c35df5",
+    "tests/test_tokenizer.py": "623611fcf53d0d9c41ac8498d9a404c8c6bc9426b6798a4a291a33bd953adc9f",
+    "tests/test_training.py": "076255abcfcc40461c5bfd81573f6f3d5d32f3ad8448f9cec18ba82a8615af42"
+  },
+  "tests": {
+    "command": "python -m unittest discover -s tests -t . -v",
+    "errors": 0,
+    "failures": 0,
+    "passed": 61,
+    "run": 64,
+    "seconds": 116.65,
+    "single_process_dropout_resume": "passed: bitwise model/optimizer equality",
+    "skipped": 3,
+    "skipped_scope": [
+      "CUDA FlexAttention",
+      "CUDA Hopper FlashAttention-3",
+      "CUDA Hopper DeepGEMM"
+    ],
+    "test_log_sha256": "f63ecb2471a4d5952c1b89ede1880dd0d804de35c323ba05d1d62f9b3f1127cd",
+    "two_process_gloo": "passed: equivalent single-process update parity; bitwise same-world-size model/optimizer resume"
+  }
+}

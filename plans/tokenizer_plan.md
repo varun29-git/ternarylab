@@ -1,3 +1,5 @@
+> **Historical / superseded:** This research or planning document is not the supported training specification. Its architectural, tokenizer, scaling and performance claims are not release guarantees. Use `README.md` and `reports/PRETRAINING_AUDIT.md` at the repository root for the maintained implementation, measured evidence and outstanding launch gates.
+
 # Tokenizer Plan for 1.5B BitNet Multilingual Model
 ## English + 10 Indic Languages Training Project
 

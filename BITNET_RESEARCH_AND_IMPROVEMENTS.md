@@ -1,3 +1,5 @@
+> **Historical / superseded:** This research or planning document is not the supported training specification. Its architectural, tokenizer, scaling and performance claims are not release guarantees. Use `README.md` and `reports/PRETRAINING_AUDIT.md` at the repository root for the maintained implementation, measured evidence and outstanding launch gates.
+
 # BitNet Model Architecture: Deep Research & SOTA Improvements
 
 This report provides a comprehensive analysis of every niche architectural component implemented in the BitNet-LLaMA model, along with concrete state-of-the-art (SOTA) improvements.

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "terminus-bitnet"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.8,<3", "numpy>=1.26,<3", "sentencepiece==0.2.1", "protobuf>=4.25,<7"]
+
+[tool.setuptools.packages.find]
+include = ["terminus*"]
+
+[project.optional-dependencies]
+muon = ["muon-optimizer @ git+https://github.com/KellerJordan/Muon.git@f98f1cacc0263b04290753e32be8d498c1efc806"]

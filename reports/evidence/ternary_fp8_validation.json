@@ -1,0 +1,923 @@
+{
+  "checks": {
+    "all_configs_load": "passed",
+    "archive_generated_bytecode_absent": true,
+    "archive_tracked_files_unchanged": "passed",
+    "benchmark_cli_help": "passed",
+    "compileall": "passed",
+    "documented_shell_commands_parse": "passed",
+    "git_diff_check": "passed",
+    "pip_check": "passed",
+    "shell_syntax": "passed",
+    "source_ast_and_trailing_whitespace": "passed"
+  },
+  "configs": {
+    "configs/1.5b_h100_ternary_bf16_reference.json": {
+      "counts": {
+        "adamw_fp32_training_state_bytes_excluding_activations": 24035361728,
+        "fp32_weights_and_gradients_bytes": 12017680864,
+        "fp8_weight_cache_estimated_bytes": 0,
+        "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional.",
+        "ternary": 1305477120,
+        "total": 1502210108,
+        "unquantized": 196732988
+      },
+      "sha256": "21fc956a15c8b0846fc2c13a2bc0e0c8d383363a67bc85ab8916481e48d222d1"
+    },
+    "configs/1.5b_h100_ternary_fp8.json": {
+      "counts": {
+        "adamw_fp32_training_state_bytes_excluding_activations": 24035361728,
+        "fp32_weights_and_gradients_bytes": 12017680864,
+        "fp8_weight_cache_estimated_bytes": 2611591680,
+        "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional.",
+        "ternary": 1305477120,
+        "total": 1502210108,
+        "unquantized": 196732988
+      },
+      "sha256": "ea504a73b250b7c1c5e2d2fe557df69096c6b6eca2932683b78ee4d122832aac"
+    },
+    "configs/1.5b_h100_ternary_fp8_dgrad.json": {
+      "counts": {
+        "adamw_fp32_training_state_bytes_excluding_activations": 24035361728,
+        "fp32_weights_and_gradients_bytes": 12017680864,
+        "fp8_weight_cache_estimated_bytes": 2611591680,
+        "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional.",
+        "ternary": 1305477120,
+        "total": 1502210108,
+        "unquantized": 196732988
+      },
+      "sha256": "79d12a56233417ffd67b5981ac7c12fe7aeb8ccb2ebff619067dcc90b63032e0"
+    }
+  },
+  "cuda_available": false,
+  "date": "2026-09-06",
+  "environment": {
+    "platform": "macOS-26.6.1-arm64-arm-64bit-Mach-O",
+    "python": "3.14.5 (main, May 10 2026, 10:21:34) [Clang 21.0.0 (clang-2100.0.123.102)]",
+    "runtime": {
+      "capability": null,
+      "cuda": null,
+      "device": "cpu",
+      "gpu": null,
+      "gpu_memory_bytes": null,
+      "gpu_multiprocessors": null,
+      "native_sources": {
+        "deep_gemm": null,
+        "flash_attn_3_cuda": null,
+        "flash_attn_interface": null,
+        "muon": null,
+        "triton": null
+      },
+      "packages": {
+        "deep-gemm": null,
+        "flash-attn": null,
+        "muon-optimizer": null,
+        "numpy": "2.5.1",
+        "sentencepiece": "0.2.1",
+        "triton": null
+      },
+      "python": "3.14.5",
+      "torch": "2.13.0"
+    }
+  },
+  "inspected_deepgemm_api_commit": "559d79fb6994a58b8a15b4b93bf13ccc16edf247",
+  "native_cuda_executed": false,
+  "not_validated": [
+    "Triton GPU compilation/execution",
+    "native DeepGEMM or FA3 CUDA results",
+    "1.5B H100 peak memory and throughput",
+    "NCCL/multi-node scaling and recovery",
+    "equal-token multilingual quality or convergence parity",
+    "dollar savings",
+    "packed-ternary inference export/runtime"
+  ],
+  "numerical_validation": {
+    "backend": "CPU FP32 emulation of DeepGEMM operands, NOT native GPU execution",
+    "cases": [
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9999987170404672,
+            "relative_error": 0.001958979864691474
+          },
+          "weight_gradient": {
+            "cosine": 0.9999972982633769,
+            "relative_error": 0.0023375360390708367
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.999998547154855,
+            "relative_error": 0.00334539708604478
+          },
+          "weight_gradient": {
+            "cosine": 0.9999973714397982,
+            "relative_error": 0.0022951450558090563
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9999983691087112,
+            "relative_error": 0.002242195069362831
+          },
+          "weight_gradient": {
+            "cosine": 0.9999980842033944,
+            "relative_error": 0.0022125722620027813
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000004,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9999975218609306,
+            "relative_error": 0.0025003850770742484
+          },
+          "weight_gradient": {
+            "cosine": 0.9999974392732777,
+            "relative_error": 0.002263296940547608
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9999961890655104,
+            "relative_error": 0.0028744551422865542
+          },
+          "weight_gradient": {
+            "cosine": 0.9999974483947441,
+            "relative_error": 0.002259487570004952
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9999980133590419,
+            "relative_error": 0.0029579491120209143
+          },
+          "weight_gradient": {
+            "cosine": 0.9999976163879846,
+            "relative_error": 0.002183397439272303
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "bf16",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996928212133007,
+            "relative_error": 0.024789151823132908
+          },
+          "weight_gradient": {
+            "cosine": 0.9999971223326123,
+            "relative_error": 0.002403370134566448
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996701959287244,
+            "relative_error": 0.02571201175859849
+          },
+          "weight_gradient": {
+            "cosine": 0.9999973915148944,
+            "relative_error": 0.002284751613669376
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999998,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996123853509266,
+            "relative_error": 0.027867908050106655
+          },
+          "weight_gradient": {
+            "cosine": 0.999998553312767,
+            "relative_error": 0.0017018401965234943
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996714702433337,
+            "relative_error": 0.025632416504378308
+          },
+          "weight_gradient": {
+            "cosine": 0.999997438306656,
+            "relative_error": 0.002263825145181375
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996722233430129,
+            "relative_error": 0.025604932662315436
+          },
+          "weight_gradient": {
+            "cosine": 0.9999974405229531,
+            "relative_error": 0.0022625100437354494
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999998,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999998,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.999649176789432,
+            "relative_error": 0.026495693158599263
+          },
+          "weight_gradient": {
+            "cosine": 0.9999975134056046,
+            "relative_error": 0.0022304524057875303
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999998,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "dgrad",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996363293283593,
+            "relative_error": 0.026966849491849958
+          },
+          "weight_gradient": {
+            "cosine": 0.9992969797863901,
+            "relative_error": 0.037737586585526735
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999789,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996816440066876,
+            "relative_error": 0.02524362487260613
+          },
+          "weight_gradient": {
+            "cosine": 0.9992768859683122,
+            "relative_error": 0.03805165665873151
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999819,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996687760609811,
+            "relative_error": 0.026084520266256586
+          },
+          "weight_gradient": {
+            "cosine": 0.9994142996963625,
+            "relative_error": 0.03423560343976435
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999917,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 7,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996701386389147,
+            "relative_error": 0.025682953623408816
+          },
+          "weight_gradient": {
+            "cosine": 0.9990083302842941,
+            "relative_error": 0.04453762324132541
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999839,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "normal",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 0.9999999999999999,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "zero_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996660392282724,
+            "relative_error": 0.025842069560408784
+          },
+          "weight_gradient": {
+            "cosine": 0.9989997985765667,
+            "relative_error": 0.04474381824856149
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999793,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "tiny_gradient",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      },
+      {
+        "gradient_approximation": {
+          "input_gradient": {
+            "cosine": 0.9996885987203389,
+            "relative_error": 0.02495421604951933
+          },
+          "weight_gradient": {
+            "cosine": 0.9992068858697493,
+            "relative_error": 0.03986256947675937
+          }
+        },
+        "implementation": {
+          "forward": {
+            "cosine": 1.0000000000000002,
+            "relative_error": 0.0
+          },
+          "input_gradient": {
+            "cosine": 1.0,
+            "relative_error": 0.0
+          },
+          "weight_gradient": {
+            "cosine": 0.9999999999999812,
+            "relative_error": 0.0
+          }
+        },
+        "mode": "full",
+        "outputs": 256,
+        "rows": 257,
+        "stress": "token_outliers",
+        "weight_gradient_dtype": "torch.float32",
+        "width": 128
+      }
+    ],
+    "quantizers": {
+      "max_directional_error": 0.0,
+      "nonfinite_propagation": "passed",
+      "ternary_error": 0.0,
+      "tiny_gradients": "passed"
+    },
+    "seed": 1337
+  },
+  "prior_evidence": "reports/evidence/validation.json describes the pre-FP8-follow-up snapshot and is retained unchanged.",
+  "source": {
+    "__init__.py": "065c7c7cc0b00a4777b7a42d86e522a667f106cc71c75d4e762f5a88a568602e",
+    "benchmark.py": "0d96c4c512c967913d5b087a51011bdfc32023097dd66b9cf065686edf006e90",
+    "checkpoint.py": "e294ead4a3a83fd82684c0bb29ca555bc4c36c15a24a22dc9a102e64e0015130",
+    "data.py": "05fa8375a2cffd53dfa4f61df8dffeefcfc97f7bf5db02e7d7d748f99c68ab6e",
+    "fp8_benchmark.py": "3d018b8f2940560573c0cc967d29684373cd6b1b0d6c25a1ae5782ecb41462b0",
+    "fp8_kernels.py": "19e5e4fa2944adb068d7aa4dc5a2ec27328c8664f298e1d3d26d537228435a98",
+    "fp8_validation.py": "2adb5344f226ce14409add10dde16d920225312d95ddc313ad8b41f83a21c291",
+    "generate.py": "4291a34a0c05c399e85d117b3930bc922a2ee18d24cdb38a1e1f5c5a6f2da526",
+    "integrity.py": "3ed531f466850b125cedc21d5a568817e0784a933d4f7da867556966585cf1f7",
+    "kernels.py": "dcd23e01c83b5d177377b3290017a5602140193e9fa62eafbca04c81adaf098e",
+    "model.py": "b36f68c12aa791b5454ab7cbe4eef7a62302952acec619e49ee3e919011b54f1",
+    "optim.py": "5d058ff61cfe604d3212207a4ea8baccd01c690b14ba60634ef008ab789da811",
+    "preflight.py": "6483ff458ec8c0c3a32b8f113f29b16cbfee887aabcd67cb50b068e49d18e43e",
+    "prepare_data.py": "ebc477c02de1e2d5671d3ee9b00156434228a97dabad3689bb27801d9acb4db5",
+    "quantization.py": "27ffc43cbec788ee1b7bcafce8c227f84b7b8227d258408438b7c24dd533335d",
+    "tokenizer.py": "1d66fa9e57764204a2feafee897b44dfe07ce22388e950053f3703ee3faa2d20",
+    "train.py": "e5ec07b87248bd317f05297b6fb8c6ca5b2a147f5f277b2eae5f77e05f83a3e0"
+  },
+  "status": "CPU_REFERENCE_AND_REGRESSION_CHECKS_PASSED__H100_AND_QUALITY_ACCEPTANCE_PENDING",
+  "test_sources": {
+    "tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/helpers.py": "741c504a73226d014d1fd6e0b1598f7ad97c042cb1eb08ce338f0012dde68ecc",
+    "tests/test_data.py": "39a58da6c9dad8c671f10c84af8d354c72670e2dcb9d2f14f74ef031c5c5b4d9",
+    "tests/test_fp8.py": "8a6167f967cddfa72510d6f514f3e4cc39a4918f8ca053d31bef73b598d337cb",
+    "tests/test_gpu.py": "cc85cbf7f52503b723a7f5775c5f4560a9eef5e1b9f882561a2d0e51d38f7212",
+    "tests/test_model.py": "6072792f2ea6e2679ec1b1c04149ed2d0c1325730ad3d27934f6594fa5c35df5",
+    "tests/test_tokenizer.py": "623611fcf53d0d9c41ac8498d9a404c8c6bc9426b6798a4a291a33bd953adc9f",
+    "tests/test_training.py": "076255abcfcc40461c5bfd81573f6f3d5d32f3ad8448f9cec18ba82a8615af42"
+  },
+  "unit_tests": {
+    "command": ".venv/bin/python -m unittest discover -s tests -t . -v",
+    "errors": 0,
+    "failures": 0,
+    "local_log_sha256": "b9bef296729fe267fa2790a6299f9307dbf21a67e4b09478422ee38da44621bf",
+    "passed": 77,
+    "seconds": 113.287,
+    "skipped_cuda": 6,
+    "skipped_tests": [
+      "test_fused_directional_quantization_and_layout (tests.test_fp8.GPUFP8QuantizerTests.test_fused_directional_quantization_and_layout) ... skipped 'Hopper CUDA unavailable: fused FP8 kernels are not certified locally'",
+      "test_fused_ternary_scales_and_exact_transpose (tests.test_fp8.GPUFP8QuantizerTests.test_fused_ternary_scales_and_exact_transpose) ... skipped 'Hopper CUDA unavailable: fused FP8 kernels are not certified locally'",
+      "test_deepgemm_full_fp8_backward_and_fused_cache (tests.test_gpu.GPUPreflightTests.test_deepgemm_full_fp8_backward_and_fused_cache) ... skipped 'CUDA unavailable: these are mandatory hardware gates, not certified passes'",
+      "test_deepgemm_native_forward_and_ste (tests.test_gpu.GPUPreflightTests.test_deepgemm_native_forward_and_ste) ... skipped 'CUDA unavailable: these are mandatory hardware gates, not certified passes'",
+      "test_fa3_forward_backward_and_cached_offsets (tests.test_gpu.GPUPreflightTests.test_fa3_forward_backward_and_cached_offsets) ... skipped 'CUDA unavailable: these are mandatory hardware gates, not certified passes'",
+      "test_flex_forward_backward_and_cached_offsets (tests.test_gpu.GPUPreflightTests.test_flex_forward_backward_and_cached_offsets) ... skipped 'CUDA unavailable: these are mandatory hardware gates, not certified passes'"
+    ],
+    "total": 83
+  }
+}

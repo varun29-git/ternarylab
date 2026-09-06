@@ -203,15 +203,15 @@ def quantize_activation_fp8_e4m3(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Quantize activation tensor to FP8 E4M3 with fine-grained 1x128 block-wise dynamic scaling.
 
-    Args:
-        x: Input tensor of shape [..., K].
-        block_size: Group size along the channel dimension K (default: 128).
-        eps: Epsilon floor for numerical stability.
-
-    Returns:
-        x_fp8: Quantized tensor of shape [..., K] in torch.float8_e4m3fn.
-        scale: FP32 scale factors of shape [..., ceil(K / block_size)].
+    Uses DeepSeek fused Triton kernel on CUDA, with vectorized reference fallback on CPU.
     """
+    if x.is_cuda and x.shape[-1] % block_size == 0:
+        try:
+            from kernels import deepseek_act_quant
+            return deepseek_act_quant(x, block_size=block_size)
+        except Exception:
+            pass
+
     orig_shape = x.shape
     k = orig_shape[-1]
     groups = (k + block_size - 1) // block_size

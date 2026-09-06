@@ -121,6 +121,40 @@ def triton_act_quant_kernel():
         return None
 
 
+def deepseek_act_quant(
+    x: torch.Tensor,
+    block_size: int = 128,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Block-wise activation quantization into FP8 E4M3 following DeepSeek-V3 specification.
+
+    Uses fused Triton kernel when on CUDA, with vectorized reference fallback on CPU.
+    """
+    assert x.shape[-1] % block_size == 0, f"Last dimension must be divisible by {block_size}"
+    orig_shape = x.shape
+
+    if x.is_cuda:
+        kernel = triton_act_quant_kernel()
+        if kernel is not None:
+            x_contig = x.contiguous()
+            total_elements = x_contig.numel()
+            grid = (total_elements // block_size,)
+            y = torch.empty_like(x_contig, dtype=torch.float8_e4m3fn)
+            s = x_contig.new_empty(*orig_shape[:-1], orig_shape[-1] // block_size, dtype=torch.float32)
+            kernel[grid](x_contig, y, s, BLOCK_SIZE=block_size)
+            return y, s
+
+    # Reference implementation
+    k = orig_shape[-1]
+    groups = k // block_size
+    x_reshaped = x.float().view(*orig_shape[:-1], groups, block_size)
+    amax = x_reshaped.abs().amax(dim=-1, keepdim=True).clamp_min(1e-5)
+    s = amax / 448.0
+    scaled = x_reshaped / s
+    clamped = scaled.clamp(-448.0, 448.0)
+    y = clamped.to(torch.float8_e4m3fn).view_as(x)
+    return y, s.squeeze(-1)
+
+
 def kernel_policy() -> Dict[str, object]:
     """Describe Test 17's strict accelerator-kernel policy."""
 

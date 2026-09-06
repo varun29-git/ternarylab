@@ -258,6 +258,77 @@ def dequantize_activation_fp8_e4m3(
     return res
 
 
+def quantize_weight_fp8_e4m3_2d(
+    weight: torch.Tensor,
+    block_size: int = 128,
+    eps: float = 1e-5,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Quantize 2D weight matrix to FP8 ternary {-1, 0, 1} with matching 128x128 block scales.
+
+    Computes genuine 2D block absmean scale across both output (N) and input (K) dimensions.
+    Returns:
+        w_ternary: (N, K) in torch.float8_e4m3fn containing {-1.0, 0.0, 1.0}
+        w_scale_2d: (ceil(N/block_size), ceil(K/block_size)) in float32
+    """
+    n, k = weight.shape
+    n_pad = (block_size - (n % block_size)) % block_size
+    k_pad = (block_size - (k % block_size)) % block_size
+    w_float = weight.float()
+    if n_pad > 0 or k_pad > 0:
+        w_float = F.pad(w_float, (0, k_pad, 0, n_pad))
+
+    padded_n, padded_k = w_float.shape
+    n_blocks = padded_n // block_size
+    k_blocks = padded_k // block_size
+
+    # Shape: (n_blocks, block_size, k_blocks, block_size) -> (n_blocks, k_blocks, block_size, block_size)
+    w_blocks = w_float.view(n_blocks, block_size, k_blocks, block_size).permute(0, 2, 1, 3)
+
+    # 2D block absmean scale: shape (n_blocks, k_blocks)
+    w_scale_2d = w_blocks.abs().mean(dim=(-1, -2)).clamp_min(eps)
+
+    # Quantize against the exact same 2D scale
+    w_scale_expanded = w_scale_2d.unsqueeze(-1).unsqueeze(-1)
+    w_ternary_blocks = torch.round(w_blocks / w_scale_expanded).clamp_(-1.0, 1.0)
+
+    w_ternary = (
+        w_ternary_blocks.permute(0, 2, 1, 3)
+        .reshape(padded_n, padded_k)[:n, :k]
+        .contiguous()
+        .to(torch.float8_e4m3fn)
+    )
+    return w_ternary, w_scale_2d.contiguous()
+
+
+def expand_scale_2d(
+    scale_2d: torch.Tensor,
+    n: int,
+    k: int,
+    block_size: int = 128,
+) -> torch.Tensor:
+    """Expand (N//block_size, K//block_size) 2D scale grid to (N, K) per-element scale tensor."""
+    return (
+        scale_2d.repeat_interleave(block_size, dim=0)
+        .repeat_interleave(block_size, dim=1)[:n, :k]
+        .contiguous()
+    )
+
+
+def dequantize_weight_fp8_e4m3_2d(
+    w_ternary: torch.Tensor,
+    w_scale_2d: torch.Tensor,
+    block_size: int = 128,
+    out_dtype: Optional[torch.dtype] = None,
+) -> torch.Tensor:
+    """Dequantize 2D block-scaled FP8 ternary weights back to high precision."""
+    n, k = w_ternary.shape
+    w_scale_expanded = expand_scale_2d(w_scale_2d, n, k, block_size=block_size)
+    dequant = w_ternary.float() * w_scale_expanded
+    if out_dtype is not None:
+        dequant = dequant.to(dtype=out_dtype)
+    return dequant
+
+
 class DeepGEMMBitLinearFunction(torch.autograd.Function):
     """Autograd Function integrating official DeepGEMM FP8 Tensor Core GEMM on Hopper SM90+ with STE autograd."""
 
@@ -266,81 +337,70 @@ class DeepGEMMBitLinearFunction(torch.autograd.Function):
         ctx,
         x: torch.Tensor,
         weight: torch.Tensor,
-        alpha_scale: torch.Tensor,
-        alpha_group_size: int,
-        eps: float,
-        quantization_strength: float,
+        alpha_group_size: int = 128,
+        eps: float = 1e-5,
     ) -> torch.Tensor:
         orig_shape = x.shape
         k = orig_shape[-1]
         x_2d = x.reshape(-1, k)
-        m = x_2d.shape[0]
         n = weight.shape[0]
 
         # 1. Activation quantization (FP8 E4M3 + 1x128 block scale)
         x_fp8, x_scale = quantize_activation_fp8_e4m3(x_2d, block_size=alpha_group_size, eps=eps)
 
-        # 2. Weight quantization (FP8 E4M3 + 2D scale for DeepGEMM)
-        absmean = alpha_scale.clamp_min(eps)
-        w_ternary = torch.round(weight.float() / absmean).clamp_(-1, 1).to(torch.float8_e4m3fn)
-
-        indices_n = torch.arange(0, n, alpha_group_size, device=weight.device)
-        indices_k = torch.arange(0, k, alpha_group_size, device=weight.device)
-        w_scale_2d = absmean[indices_n][:, indices_k].contiguous()
+        # 2. Weight quantization (FP8 E4M3 ternary + genuine 2D 128x128 block scale)
+        w_ternary, w_scale_2d = quantize_weight_fp8_e4m3_2d(weight, block_size=alpha_group_size, eps=eps)
 
         # 3. Native DeepGEMM Hopper SM90 execution path
         used_native_deep_gemm = False
         if x_2d.is_cuda:
-            try:
-                from kernels import deep_gemm_available, deep_gemm_fp8_gemm_nt
+            from kernels import deep_gemm_available, deep_gemm_fp8_gemm_nt
 
-                if deep_gemm_available():
-                    out_2d = deep_gemm_fp8_gemm_nt(
-                        (x_fp8.contiguous(), x_scale.contiguous()),
-                        (w_ternary.contiguous(), w_scale_2d.contiguous()),
-                    )
-                    used_native_deep_gemm = True
-            except Exception:
-                used_native_deep_gemm = False
+            if deep_gemm_available():
+                out_2d = deep_gemm_fp8_gemm_nt(
+                    (x_fp8.contiguous(), x_scale.contiguous()),
+                    (w_ternary.contiguous(), w_scale_2d.contiguous()),
+                )
+                used_native_deep_gemm = True
 
         if not used_native_deep_gemm:
             # Bit-identical reference STE GEMM
             x_dequant = dequantize_activation_fp8_e4m3(
                 x_fp8, x_scale, block_size=alpha_group_size, out_dtype=x.dtype
             )
-            w_dequant = (w_ternary.to(dtype=weight.dtype) * absmean).to(dtype=x.dtype)
+            w_dequant = dequantize_weight_fp8_e4m3_2d(
+                w_ternary, w_scale_2d, block_size=alpha_group_size, out_dtype=x.dtype
+            )
             out_2d = F.linear(x_dequant, w_dequant)
 
-        ctx.save_for_backward(x_2d, weight, absmean)
+        ctx.save_for_backward(x_2d, weight, w_ternary, w_scale_2d)
         ctx.orig_shape = orig_shape
-        ctx.quantization_strength = quantization_strength
+        ctx.alpha_group_size = alpha_group_size
 
         return out_2d.view(*orig_shape[:-1], n)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
-        x_2d, weight, absmean = ctx.saved_tensors
+        x_2d, weight, w_ternary, w_scale_2d = ctx.saved_tensors
         orig_shape = ctx.orig_shape
-        n = weight.shape[0]
+        n, k = weight.shape
 
         grad_output_2d = grad_output.reshape(-1, n)
 
-        w_ternary = torch.round(weight.float() / absmean).clamp_(-1, 1).to(torch.float8_e4m3fn)
-        w_effective = (w_ternary.to(dtype=weight.dtype) * absmean).to(dtype=grad_output.dtype)
+        # Reconstruct effective weight using the exact same 2D block scale
+        w_effective = dequantize_weight_fp8_e4m3_2d(
+            w_ternary, w_scale_2d, block_size=ctx.alpha_group_size, out_dtype=grad_output.dtype
+        )
 
         # Straight-Through Estimator backward pass:
-        # dL/dx = grad_output @ W
+        # dL/dx = grad_output @ W_effective
         grad_x_2d = grad_output_2d @ w_effective
         grad_x = grad_x_2d.view(orig_shape)
 
         # dL/dw = grad_output.T @ X
         grad_weight = (grad_output_2d.t() @ x_2d.to(dtype=grad_output.dtype)).to(dtype=weight.dtype)
 
-        if ctx.quantization_strength < 1.0:
-            grad_x = grad_x * ctx.quantization_strength
-            grad_weight = grad_weight * ctx.quantization_strength
-
-        return grad_x, grad_weight, None, None, None, None
+        return grad_x, grad_weight, None, None
 
 
 class BitLinear(nn.Module):
@@ -418,9 +478,21 @@ class BitLinear(nn.Module):
         )[:, : self.in_features]
 
     def alpha_values(self) -> torch.Tensor:
+        if self.quantize_activations:
+            _, w_scale_2d = quantize_weight_fp8_e4m3_2d(
+                self.weight, block_size=self.alpha_group_size, eps=self.eps
+            )
+            return w_scale_2d.reshape(-1)
         return self._grouped_absmean_values()
 
     def alpha_scale(self) -> torch.Tensor:
+        if self.quantize_activations:
+            _, w_scale_2d = quantize_weight_fp8_e4m3_2d(
+                self.weight, block_size=self.alpha_group_size, eps=self.eps
+            )
+            return expand_scale_2d(
+                w_scale_2d, self.out_features, self.in_features, block_size=self.alpha_group_size
+            )
         return self._expand_group_values(self._grouped_absmean_values())
 
     @property
@@ -432,6 +504,11 @@ class BitLinear(nn.Module):
         return self.weight.detach().float().abs().mean()
 
     def ternary_weight(self, alpha_scale: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if self.quantize_activations and alpha_scale is None:
+            w_ternary, _ = quantize_weight_fp8_e4m3_2d(
+                self.weight, block_size=self.alpha_group_size, eps=self.eps
+            )
+            return w_ternary
         weight = self.weight.float()
         if alpha_scale is None:
             alpha_scale = self.alpha_scale()
@@ -445,9 +522,18 @@ class BitLinear(nn.Module):
 
     def quantized_weight(self) -> torch.Tensor:
         latent = self.weight.float()
-        alpha_scale = self.alpha_scale()
-        ternary = self.ternary_weight(alpha_scale)
-        quantized_target = alpha_scale * ternary.to(dtype=latent.dtype)
+        if self.quantize_activations:
+            w_ternary, w_scale_2d = quantize_weight_fp8_e4m3_2d(
+                self.weight, block_size=self.alpha_group_size, eps=self.eps
+            )
+            quantized_target = dequantize_weight_fp8_e4m3_2d(
+                w_ternary, w_scale_2d, block_size=self.alpha_group_size, out_dtype=latent.dtype
+            )
+        else:
+            alpha_scale = self.alpha_scale()
+            ternary = self.ternary_weight(alpha_scale)
+            quantized_target = alpha_scale * ternary.to(dtype=latent.dtype)
+
         quantized_target_fp8 = quantized_target.to(torch.float8_e4m3fn).to(dtype=latent.dtype)
 
         # Straight-Through Estimator (STE)
@@ -486,13 +572,17 @@ class BitLinear(nn.Module):
         if not self.quantize_activations:
             weight = self.quantized_weight().to(dtype=x.dtype)
             return F.linear(x, weight, None)
+
+        if self._quantization_strength < 1.0:
+            x_blend, _ = self.quantized_activation(x)
+            w_blend = self.quantized_weight().to(dtype=x.dtype)
+            return F.linear(x_blend, w_blend, None)
+
         return DeepGEMMBitLinearFunction.apply(
             x,
             self.weight,
-            self.alpha_scale(),
             self.alpha_group_size,
             self.eps,
-            self._quantization_strength,
         )
 
 

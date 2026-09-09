@@ -1,5 +1,15 @@
 # Terminus BitNet pretraining
 
+The September 9 fixed-budget work adds **exactly 1,500,000,000-parameter** configurations in `configs/1.5b_exact_h100_fp8.json` and `configs/1.5b_exact_h100_bf16.json`. They include ternary QAT for the tied embedding/head, fused QKV and gate/up projections, streaming linear cross entropy, optional fused RMSNorm/SwiGLU, explicit 32-GPU DDP settings and exact token/batch checks. The earlier configurations below remain separate experiments.
+
+See [the exact 1.5B optimization report](reports/EXACT_1_5B_OPTIMIZATION.md) for the implemented changes, 17-case search, language/tokenizer recipe, source verification, numerical tests and H100 measurement procedure. `python -m terminus.budget` computes the requirement: **1,400,004,149,248 tokens at 2.1605M cluster tokens/s within a 180-hour production allocation**, with setup, experiments and recovery charged separately inside ₹600,000. This is a required rate, not a measured H100 result. GPU access and a curated production corpus were unavailable for this work.
+
+```bash
+python -m terminus.budget
+python -m terminus.experiments --output-dir artifacts/exact_sweep
+python -m unittest discover -s tests -t . -v
+```
+
 The maintained implementation is `terminus/`. The original 150M run remains in `archive/` and is **not a supported training entrypoint**. Its protection manifest already disagreed with six files when this audit began; the archive has not been edited.
 
 **Launch status: not approved for the final 1.5B run.** CPU correctness, Unicode handling, and two-process recovery are tested. Actual CUDA kernels, full-scale memory/throughput, multi-node recovery, and real multilingual quality still require measured acceptance. See `reports/PRETRAINING_AUDIT.md` for findings, changes, evidence, and the release checklist.
@@ -26,9 +36,9 @@ The six CUDA tests skip on CPU. On a GPU host they exercise optional FA3, FlexAt
 - Decoder-only, bias-free Transformer; pre-RMSNorm, GQA, parameter-free Q/K RMSNorm, RoPE, scalar SubLN, SwiGLU and tied embeddings/output head.
 - Ternary projection targets with FP32 latent parameters and straight-through training; full FP8 backward uses explicit operation-specific approximate gradients. This is quantization-aware training, **not 1.58-bit training-state storage**.
 - `configs/development.json`: 82,244 parameters, CPU FP32, explicit reference attention. Synthetic correctness configuration, not a multilingual tokenizer configuration.
-- `configs/1.5b_candidate.json`: **1,502,210,108 parameters**, 30 layers, width 2048, 16 query/4 KV heads, FFN 5376, proposed vocabulary 96,000, context 4096, four local-1024 layers then one global layer.
+- `configs/1.5b_candidate.json`: **1,445,062,716 parameters**, 30 layers, width 2048, 16 query/4 KV heads, FFN 5376, Sarvam-1 vocabulary **68,096**, context 4096, four local-512 layers then one global layer. Sarvam’s table is 68,096 rather than 64,000; the embedding width matches the tokenizer instead of truncating IDs.
 - The candidate starts with AdamW, FP32 latent/state storage, BF16 autocast, block checkpointing, chunked cross entropy, FA3 attention, rowwise ternary scales, and no FP8 activation quantization. Dimensions are valid; the LR, vocabulary, depth/width, token budget and mixture are **pilot choices, not empirically optimal values**.
-- FA3 is explicitly gated to Hopper SM90. FlexAttention is an alternative requiring its own preflight. The reference attention backend is for correctness, not production throughput.
+- FA3 is explicitly gated to Hopper SM90. FlexAttention is an alternative requiring its own preflight (`configs/1.5b_h100_sarvam_flex.json`). The reference attention backend is for correctness, not production throughput.
 - DeepGEMM is opt-in: SM90, aligned dimensions, activation FP8 and 128x128 weight groups. Changing to it changes the quantization layout and requires a new run/ablation. It is not an automatic accelerator for the rowwise baseline.
 
 ## H100 ternary–FP8 path
@@ -64,8 +74,14 @@ Supply local JSONL with one document per record:
 Both `train` and held-out `val` must contain all eleven languages. Assign splits and review licensing, privacy, language labels, quality, near-duplicates and benchmark contamination **before** preparing data. Merely writing a license string is not a legal or quality review.
 
 ```bash
+python -m terminus.tokenizer fetch --repo sarvamai/sarvam-1 --output data/tokenizer/sarvam-1
+python -m terminus.tokenizer probe-corpus --output data/probe.jsonl --copies 4000
+python -m terminus.prepare_data --corpus data/probe.jsonl \
+  --tokenizer data/tokenizer/sarvam-1 --output-dir data/prepared \
+  --source-mix data/language_mix.json --total-train-tokens 800000 \
+  --seq-len 4096 --batch-size 1
 python -m terminus.tokenizer train --corpus corpus.jsonl \
-  --output data/tokenizer --vocab-size 96000
+  --output data/tokenizer --vocab-size 64000
 python -m terminus.tokenizer audit --corpus heldout.jsonl \
   --tokenizer data/tokenizer.model --output artifacts/tokenizer_audit.json
 python -m terminus.prepare_data --corpus corpus.jsonl \
@@ -76,9 +92,9 @@ python -m terminus.prepare_data --corpus corpus.jsonl \
 
 `reviewed_language_mix.json` maps every language code to a positive token fraction; fractions sum to 1 and use increments of 0.001. Choose these using corpus sizes, measured tokenizer fertility and target quality, not a fabricated equal-weight default. Every curriculum phase must preserve coverage. Sampling consumes available source tokens deterministically; preparation fails if a source cannot meet its allocated budget. It does not silently loop/repeat exhausted data.
 
-Tokenizer training uses training documents only, language-stratified bounded reservoirs, NFC, byte fallback, identity SentencePiece normalization and preserved joiners/whitespace. Inspect held-out per-language byte fallback and tokens per codepoint; those metrics are not grapheme counts or quality guarantees. The default reservoir size is a pilot setting and must be reviewed for a real 96k vocabulary.
+Tokenizer training uses training documents only, language-stratified bounded reservoirs, NFC, byte fallback, identity SentencePiece normalization and preserved joiners/whitespace. Inspect held-out per-language byte fallback and tokens per codepoint; those metrics are not grapheme counts or quality guarantees. The default in-house vocabulary is 64,000; the current 1.5B configs use the frozen Sarvam-1 68,096-piece table instead.
 
-Preparation packs normalized documents with EOS, removes exact normalized duplicate documents and refuses cross-split duplicates. A 96k vocabulary uses `uint32`; IDs are never replaced by EOS. Manifest checks verify the actual local tokenizer, all shard hashes, integer ranges, language coverage and budgets. The whole-shard duplicate check is deliberately conservative: common tiny identical fragments may require larger shards and re-preparation, not disabling the check.
+Preparation packs normalized documents with EOS, removes exact normalized duplicate documents and refuses cross-split duplicates. Vocabularies above 65,536 use `uint32`; IDs are never replaced by EOS. Manifest checks verify the actual local tokenizer, all shard hashes, integer ranges, language coverage and budgets. The whole-shard duplicate check is deliberately conservative: common tiny identical fragments may require larger shards and re-preparation, not disabling the check.
 
 Production packing is a continuous causal stream with EOS, not document-isolated attention. Targets are already shifted by the loader. The model does not shift them a second time. `-100` excludes a target from loss; a reference attention key mask does not implicitly construct a target mask.
 
@@ -92,6 +108,7 @@ python -m terminus.preflight --config configs/1.5b_candidate.json \
 python -m terminus.benchmark training --config configs/1.5b_candidate.json \
   --preflight-report artifacts/h100_preflight.json \
   --batch-size 1 --warmup-steps 5 --steps 20 \
+  --tokens data/prepared/en.train.00000.bin \
   --output artifacts/h100_model_benchmark.json
 CONFIG=configs/1.5b_candidate.json \
 MANIFEST=data/prepared/manifest.json DATA_ROOT=data/prepared \

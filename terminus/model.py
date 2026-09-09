@@ -53,12 +53,17 @@ class BitNetLlamaConfig:
     fp8_backward: str = "bf16"
     fp8_quantizer: str = "torch"
     fp8_cache_weights: bool = False
+    learned_norms: bool = True
+    ternary_embeddings: bool = False
+    loss_backend: str = "chunked"
+    elementwise_backend: str = "torch"
+    fused_projections: bool = False
 
     def __post_init__(self):
         validate_fp8_options(self.fp8_backward, self.fp8_quantizer)
         if self.linear_backend != "deepgemm" and (self.fp8_backward != "bf16" or self.fp8_quantizer != "torch" or self.fp8_cache_weights):
             raise ValueError("FP8 backward and fused quantizers require the explicit DeepGEMM backend")
-        for name in ("use_subln", "use_embedding_projection", "quantize_activations", "gradient_checkpointing", "fp8_cache_weights"):
+        for name in ("use_subln", "use_embedding_projection", "quantize_activations", "gradient_checkpointing", "fp8_cache_weights", "learned_norms", "ternary_embeddings", "fused_projections"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a boolean")
         for name in ("vocab_size", "dim", "n_layers", "n_heads", "n_kv_heads", "ffn_dim", "max_seq_len", "alpha_group_size", "local_attention_window", "global_attention_every", "loss_chunk_size"):
@@ -82,6 +87,14 @@ class BitNetLlamaConfig:
             raise ValueError("production attention requires head_dim 64, 128 or 256")
         if self.weight_init not in {"normal", "orthogonal"} or self.ffn_activation not in {"swiglu", "relu2"}:
             raise ValueError("unsupported initialization or FFN activation")
+        if self.loss_backend not in {"chunked", "streaming"}:
+            raise ValueError("unknown loss backend")
+        if self.elementwise_backend not in {"torch", "inductor"}:
+            raise ValueError("unknown elementwise backend")
+        if self.fused_projections and self.weight_scale_layout == "blockwise" and any(
+            width % self.alpha_group_size for width in (self.dim, self.n_kv_heads * self.head_dim, self.ffn_dim)
+        ):
+            raise ValueError("fused projections must preserve blockwise quantization boundaries")
         if self.qk_norm_mode != "unit_rms":
             raise ValueError("only parameter-free Q/K RMS normalization is implemented")
         if self.pad_token_id is not None and not 0 <= self.pad_token_id < self.vocab_size:
@@ -101,12 +114,17 @@ class BitNetLlamaConfig:
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5, *, gain="channel"):
+    def __init__(self, dim, eps=1e-5, *, gain="channel", backend="torch"):
         super().__init__()
         self.dim, self.eps = dim, eps
+        self.backend = backend
         self.weight = None if gain == "none" else nn.Parameter(torch.ones(()) if gain == "scalar" else torch.ones(dim))
 
     def forward(self, values):
+        if self.backend != "torch":
+            from .elementwise import run
+
+            return run("rms_norm", self.backend, values, self.weight, self.eps)
         values_fp32 = values.float()
         normalized = values_fp32 * torch.rsqrt(values_fp32.square().mean(dim=-1, keepdim=True) + self.eps)
         if self.weight is not None:
@@ -275,19 +293,27 @@ class BitNetAttention(nn.Module):
         super().__init__()
         self.config = config
         self.is_global_layer = (layer_index + 1) % config.global_attention_every == 0
-        self.q_proj = make_linear(config, config.dim, config.dim)
-        self.k_proj = make_linear(config, config.dim, config.n_kv_heads * config.head_dim)
-        self.v_proj = make_linear(config, config.dim, config.n_kv_heads * config.head_dim)
+        if config.fused_projections:
+            self.qkv_proj = make_linear(config, config.dim, config.dim + 2 * config.n_kv_heads * config.head_dim)
+        else:
+            self.q_proj = make_linear(config, config.dim, config.dim)
+            self.k_proj = make_linear(config, config.dim, config.n_kv_heads * config.head_dim)
+            self.v_proj = make_linear(config, config.dim, config.n_kv_heads * config.head_dim)
         self.o_proj = make_linear(config, config.dim, config.dim, residual=True)
         self.q_norm = RMSNorm(config.head_dim, config.rms_norm_eps, gain="none")
         self.k_norm = RMSNorm(config.head_dim, config.rms_norm_eps, gain="none")
-        self.attn_sub_norm = RMSNorm(config.dim, config.rms_norm_eps, gain="scalar") if config.use_subln else nn.Identity()
+        self.attn_sub_norm = RMSNorm(config.dim, config.rms_norm_eps, gain="scalar" if config.learned_norms else "none") if config.use_subln else nn.Identity()
 
     def forward(self, hidden, cos, sin, attention_mask=None, cache=None):
         batch, length, _ = hidden.shape
-        query = self.q_proj(hidden).view(batch, length, self.config.n_heads, self.config.head_dim).transpose(1, 2)
-        key = self.k_proj(hidden).view(batch, length, self.config.n_kv_heads, self.config.head_dim).transpose(1, 2)
-        value = self.v_proj(hidden).view(batch, length, self.config.n_kv_heads, self.config.head_dim).transpose(1, 2)
+        if self.config.fused_projections:
+            kv_width = self.config.n_kv_heads * self.config.head_dim
+            query, key, value = self.qkv_proj(hidden).split((self.config.dim, kv_width, kv_width), dim=-1)
+        else:
+            query, key, value = self.q_proj(hidden), self.k_proj(hidden), self.v_proj(hidden)
+        query = query.view(batch, length, self.config.n_heads, self.config.head_dim).transpose(1, 2)
+        key = key.view(batch, length, self.config.n_kv_heads, self.config.head_dim).transpose(1, 2)
+        value = value.view(batch, length, self.config.n_kv_heads, self.config.head_dim).transpose(1, 2)
         query, key = apply_rotary(self.q_norm(query), cos, sin), apply_rotary(self.k_norm(key), cos, sin)
         offset = 0
         if cache is not None:
@@ -306,23 +332,33 @@ class BitNetFeedForward(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.ffn_activation = config.ffn_activation
-        if self.ffn_activation == "swiglu":
-            self.gate_proj = make_linear(config, config.dim, config.ffn_dim)
-        self.up_proj = make_linear(config, config.dim, config.ffn_dim)
+        self.elementwise_backend = config.elementwise_backend
+        self.fused_projections = config.fused_projections and self.ffn_activation == "swiglu"
+        if self.fused_projections:
+            self.gate_up_proj = make_linear(config, config.dim, 2 * config.ffn_dim)
+        else:
+            if self.ffn_activation == "swiglu":
+                self.gate_proj = make_linear(config, config.dim, config.ffn_dim)
+            self.up_proj = make_linear(config, config.dim, config.ffn_dim)
         self.down_proj = make_linear(config, config.ffn_dim, config.dim, residual=True)
-        self.ffn_sub_norm = RMSNorm(config.ffn_dim, config.rms_norm_eps, gain="scalar") if config.use_subln else nn.Identity()
+        self.ffn_sub_norm = RMSNorm(config.ffn_dim, config.rms_norm_eps, gain="scalar" if config.learned_norms else "none") if config.use_subln else nn.Identity()
 
     def forward(self, hidden):
-        activations = (functional.silu(self.gate_proj(hidden)) * self.up_proj(hidden)
-                       if self.ffn_activation == "swiglu" else functional.relu(self.up_proj(hidden)).square())
+        if self.ffn_activation == "swiglu":
+            from .elementwise import run
+
+            gate, up = self.gate_up_proj(hidden).chunk(2, dim=-1) if self.fused_projections else (self.gate_proj(hidden), self.up_proj(hidden))
+            activations = run("swiglu", self.elementwise_backend, gate, up)
+        else:
+            activations = functional.relu(self.up_proj(hidden)).square()
         return self.down_proj(self.ffn_sub_norm(activations))
 
 
 class BitNetBlock(nn.Module):
     def __init__(self, config, *, layer_index):
         super().__init__()
-        self.attn_norm = RMSNorm(config.dim, config.rms_norm_eps)
-        self.ffn_norm = RMSNorm(config.dim, config.rms_norm_eps)
+        self.attn_norm = RMSNorm(config.dim, config.rms_norm_eps, gain="channel" if config.learned_norms else "none")
+        self.ffn_norm = RMSNorm(config.dim, config.rms_norm_eps, gain="channel" if config.learned_norms else "none")
         self.attn = BitNetAttention(config, layer_index=layer_index)
         self.ffn = BitNetFeedForward(config)
 
@@ -352,13 +388,23 @@ class BitNetLlama(nn.Module):
         super().__init__()
         self.config = config or BitNetLlamaConfig()
         config = self.config
-        self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim, padding_idx=config.pad_token_id)
+        # The same STE tensor feeds lookup and the output head. All vocabulary
+        # entries are real tokens; no unused parameters pad the parameter count.
+        self.tok_embeddings = (BitLinear(config.dim, config.vocab_size,
+                               alpha_group_size=config.alpha_group_size,
+                               weight_scale_layout=config.weight_scale_layout,
+                               quantization_strength=config.quantization_strength)
+                               if config.ternary_embeddings else
+                               nn.Embedding(config.vocab_size, config.dim, padding_idx=config.pad_token_id))
         self.embed_rot_in = nn.Linear(config.dim, config.dim, bias=False) if config.use_embedding_projection else nn.Identity()
         self.embed_rot_out = nn.Linear(config.dim, config.dim, bias=False) if config.use_embedding_projection else nn.Identity()
         self.dropout = nn.Dropout(config.dropout)
         self.rotary = RotaryEmbedding(config.head_dim, config.max_seq_len, config.rope_theta)
         self.layers = nn.ModuleList(BitNetBlock(config, layer_index=index) for index in range(config.n_layers))
-        self.norm = RMSNorm(config.dim, config.rms_norm_eps)
+        self.norm = RMSNorm(config.dim, config.rms_norm_eps, gain="channel" if config.learned_norms else "none")
+        for module in self.modules():
+            if isinstance(module, RMSNorm):
+                module.backend = config.elementwise_backend
         nn.init.normal_(self.tok_embeddings.weight, std=1 / math.sqrt(config.dim))
         if config.use_embedding_projection:
             nn.init.orthogonal_(self.embed_rot_in.weight)
@@ -366,6 +412,16 @@ class BitNetLlama(nn.Module):
         if config.pad_token_id is not None:
             with torch.no_grad():
                 self.tok_embeddings.weight[config.pad_token_id].zero_()
+
+    def _compute_hidden(self, hidden):
+        # Embeddings stay FP32; RoPE must match Q/K or mixed-precision promotion
+        # turns production attention operands back into FP32.
+        if hidden.is_cuda and torch.is_autocast_enabled():
+            return hidden.to(dtype=torch.get_autocast_dtype("cuda"))
+        return hidden
+
+    def embedding_weight(self):
+        return self.tok_embeddings.quantized_weight() if self.config.ternary_embeddings else self.tok_embeddings.weight
 
     def forward(self, input_ids, targets=None, attention_mask=None, *, return_logits=True):
         if input_ids.ndim != 2 or min(input_ids.shape) <= 0 or input_ids.dtype != torch.long:
@@ -377,7 +433,9 @@ class BitNetLlama(nn.Module):
                 raise ValueError("attention_mask must be boolean [batch, sequence]")
             if self.config.attention_backend != "sdpa_reference":
                 raise ValueError("padded attention requires the explicit reference backend; production uses packed streams")
-        hidden = self.embed_rot_in(self.dropout(self.tok_embeddings(input_ids)))
+        embedding_weight = self.embedding_weight()
+        hidden = self._compute_hidden(self.embed_rot_in(self.dropout(functional.embedding(
+            input_ids, embedding_weight, padding_idx=self.config.pad_token_id))))
         cos, sin = self.rotary(input_ids.shape[1], device=hidden.device, dtype=hidden.dtype)
         for layer in self.layers:
             if self.config.gradient_checkpointing and self.training and torch.is_grad_enabled():
@@ -385,12 +443,17 @@ class BitNetLlama(nn.Module):
             else:
                 hidden = layer(hidden, cos, sin, attention_mask)
         hidden = self.embed_rot_out(self.norm(hidden))
-        logits = functional.linear(hidden, self.tok_embeddings.weight) if return_logits else None
+        logits = functional.linear(hidden, embedding_weight) if return_logits else None
         loss = loss_sum = loss_tokens = None
         if targets is not None:
             loss_tokens = targets.ne(-100).sum()
             if logits is None:
-                loss_sum = chunked_cross_entropy_sum(hidden, self.tok_embeddings.weight, targets, self.config.loss_chunk_size)
+                if self.config.loss_backend == "streaming":
+                    from .loss import streaming_cross_entropy_sum
+
+                    loss_sum = streaming_cross_entropy_sum(hidden, embedding_weight, targets, self.config.loss_chunk_size)
+                else:
+                    loss_sum = chunked_cross_entropy_sum(hidden, embedding_weight, targets, self.config.loss_chunk_size)
             else:
                 loss_sum = functional.cross_entropy(logits.reshape(-1, self.config.vocab_size).float(), targets.reshape(-1), ignore_index=-100, reduction="sum")
             loss = loss_sum / loss_tokens.clamp_min(1)
@@ -405,7 +468,9 @@ class BitNetLlama(nn.Module):
         cache = cache or InferenceKVCache(self.config)
         if cache.config != self.config:
             raise ValueError("cache belongs to a different model configuration")
-        hidden = self.embed_rot_in(self.tok_embeddings(input_ids))
+        embedding_weight = self.embedding_weight()
+        hidden = self._compute_hidden(self.embed_rot_in(functional.embedding(
+            input_ids, embedding_weight, padding_idx=self.config.pad_token_id)))
         cos, sin = self.rotary(input_ids.shape[1], device=hidden.device, dtype=hidden.dtype, offset=cache.position)
         for layer, layer_cache in zip(self.layers, cache.layers):
             hidden = layer(hidden, cos, sin, cache=layer_cache)
@@ -413,7 +478,7 @@ class BitNetLlama(nn.Module):
         if last_logits_only:
             hidden = hidden[:, -1:]
         hidden = self.embed_rot_out(self.norm(hidden))
-        logits = functional.linear(hidden, self.tok_embeddings.weight) if return_logits else None
+        logits = functional.linear(hidden, embedding_weight) if return_logits else None
         return {"logits": logits, "loss": None, "loss_tokens": None}, cache
 
     def clear_fp8_weight_cache(self):

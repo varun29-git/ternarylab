@@ -1,0 +1,43 @@
+{
+  "allocation_cluster_hours": {
+    "experiments": 8,
+    "production_including_eval_and_checkpoints": 180,
+    "recovery_reserve": 3.3125,
+    "setup_and_kernel_compilation": 4
+  },
+  "caveat": "Required rates include production validation/checkpoint time. The mixed-precision metric is a serial-roofline proxy, not measured MFU or a convergence claim. Experiment and recovery allocations consume the same hard budget.",
+  "counts": {
+    "adamw_fp32_training_state_bytes_excluding_activations": 24000000000,
+    "fp32_weights_and_gradients_bytes": 12000000000,
+    "fp8_weight_cache_estimated_bytes": 2761050240,
+    "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional.",
+    "ternary": 1500000000,
+    "total": 1500000000,
+    "unquantized": 0
+  },
+  "dense_bf16_peak_flops_per_gpu": 989000000000000,
+  "dense_fp8_peak_flops_per_gpu": 1979000000000000,
+  "flops": {
+    "bf16_useful_flops_per_token": 1333874880.0,
+    "checkpoint_recompute_flops_per_token": 0,
+    "fp8_useful_flops_per_token": 8281128960,
+    "scope": "Dense projection/head GEMMs and exact causal attention pairs; excludes quantization, norms, softmax, optimizer, padding and communication. Lookup is not charged a dense GEMM. MFU excludes recomputation.",
+    "useful_flops_per_token": 9615003840.0
+  },
+  "gpus": 32,
+  "gpus_per_node": 8,
+  "maximum_amortized_update_seconds": 1.9413578120178436,
+  "microsteps_per_rank": 2670296,
+  "nodes": 4,
+  "optimizer_updates": 333787,
+  "required_cluster_goodput_tokens_per_second": 2160500.2303209878,
+  "required_conventional_bf16_mfu": 0.6563832789072668,
+  "required_gpu_goodput_tokens_per_second": 67515.63219753087,
+  "required_mixed_precision_ideal_time_utilization": 0.37357833637710847,
+  "status": "analytical_only",
+  "target_tokens": 1400004149248,
+  "token_storage_bytes_uint16": 2800008298496,
+  "tokens_per_update": 4194304,
+  "total_cluster_hours": 195.3125,
+  "total_gpu_hours": 6250.0
+}

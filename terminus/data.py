@@ -485,11 +485,14 @@ class TrainingTokenRouter:
         return self.main, token_offset - self.config.prefix_effective_tokens
 
     def block_at_token_offset(self, token_offset: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        span, local_offset = self._span_and_offset(token_offset)
-        tokens = span.read(local_offset, self.config.seq_len + 1)
+        tokens = self.tokens_at_token_offset(token_offset)
         inputs = torch.from_numpy(tokens[:-1].copy()).long()
         targets = torch.from_numpy(tokens[1:].copy()).long()
         return inputs, targets
+
+    def tokens_at_token_offset(self, token_offset: int) -> np.ndarray:
+        span, local_offset = self._span_and_offset(token_offset)
+        return span.read(local_offset, self.config.seq_len + 1)
 
 
 class TokenBatcher:
@@ -527,11 +530,18 @@ class TokenBatcher:
         if step < 0:
             raise ValueError("step must be non-negative")
 
-        xs: List[torch.Tensor] = []
-        ys: List[torch.Tensor] = []
         global_examples_before_step = step * self.config.batch_size * self.world_size
-
-        for local_index in range(self.config.batch_size):
+        remaining = self.config.total_examples - global_examples_before_step - self.rank
+        rows = min(self.config.batch_size, max(0, math.ceil(remaining / self.world_size)))
+        if not rows:
+            if global_examples_before_step < self.config.total_examples:
+                shape = (1, self.config.seq_len)
+                return torch.zeros(shape, dtype=torch.long, device=self.device), torch.full(shape, -100, dtype=torch.long, device=self.device)
+            raise StopIteration("training token budget exhausted")
+        # Allocate a complete batch once, avoiding per-sequence tensor copies
+        # followed by two stack allocations. X/Y share the shifted CPU window.
+        windows = np.empty((rows, self.config.seq_len + 1), dtype=np.int64)
+        for local_index in range(rows):
             global_example_index = (
                 global_examples_before_step
                 + local_index * self.world_size
@@ -541,20 +551,9 @@ class TokenBatcher:
 
 
 
-            if token_offset + self.config.seq_len > self.config.usable_train_tokens:
-                break
-            inputs, targets = self.router.block_at_token_offset(token_offset)
-            xs.append(inputs)
-            ys.append(targets)
-
-        if not xs:
-            if global_examples_before_step < self.config.total_examples:
-                shape = (1, self.config.seq_len)
-                return torch.zeros(shape, dtype=torch.long, device=self.device), torch.full(shape, -100, dtype=torch.long, device=self.device)
-            raise StopIteration("training token budget exhausted")
-
-        x_batch = torch.stack(xs)
-        y_batch = torch.stack(ys)
+            windows[local_index] = self.router.tokens_at_token_offset(token_offset)
+        window_tensor = torch.from_numpy(windows)
+        x_batch, y_batch = window_tensor[:, :-1], window_tensor[:, 1:]
         if self.device is not None:
             x_batch = x_batch.to(self.device, non_blocking=True)
             y_batch = y_batch.to(self.device, non_blocking=True)

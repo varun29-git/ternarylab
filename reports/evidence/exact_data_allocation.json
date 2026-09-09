@@ -1,0 +1,32 @@
+{
+  "total_tokens": 1400004149248,
+  "sequence_length": 4096,
+  "schedule_period_sequences": 1000,
+  "language_weights": {
+    "en": 0.92,
+    "hi": 0.02,
+    "bn": 0.015,
+    "ta": 0.009,
+    "te": 0.008,
+    "mr": 0.007,
+    "gu": 0.006,
+    "kn": 0.005,
+    "ml": 0.005,
+    "or": 0.003,
+    "pa": 0.002
+  },
+  "scheduled_tokens": {
+    "en": 1288003817472,
+    "hi": 28000083968,
+    "bn": 21000060928,
+    "ta": 12600037376,
+    "te": 11200032768,
+    "mr": 9800028160,
+    "gu": 8400023552,
+    "kn": 7000018944,
+    "ml": 7000023040,
+    "or": 4200013824,
+    "pa": 2800009216
+  },
+  "scope": "Deterministic planned consumption, not available unique token stock. Each language stream requires one additional lookahead token."
+}

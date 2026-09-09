@@ -1,0 +1,31 @@
+{
+  "cases": {
+    "chunked": {
+      "forward_backward_seconds": 0.041457791998254834,
+      "loss": 41965.00390625,
+      "retained_extra_forward_storage_bytes": 0
+    },
+    "full": {
+      "forward_backward_seconds": 0.03069083400259842,
+      "loss": 41965.0,
+      "retained_extra_forward_storage_bytes": 16777220
+    },
+    "streaming": {
+      "forward_backward_seconds": 0.023826749998988817,
+      "loss": 41965.00390625,
+      "retained_extra_forward_storage_bytes": 2621440
+    }
+  },
+  "chunk_size": 64,
+  "device": "cpu",
+  "max_gradient_absolute_errors": [
+    0.0,
+    1.430511474609375e-06
+  ],
+  "scope": "Unique extra tensor storage retained by autograd after loss forward, excluding shared inputs/weights/targets; NOT peak process/GPU memory. Chunked backward recomputes logits. Streaming retains input/weight gradients and avoids that recomputation. CPU timing is not evidence of a GPU speedup.",
+  "tokens": 1024,
+  "torch": "2.13.0",
+  "vocabulary": 4096,
+  "warmup_iterations_per_case": 2,
+  "width": 128
+}

@@ -17,9 +17,11 @@ from .train import load_config, runtime_contract
 
 def count_model(config):
     with torch.device("meta"):
-        counts = BitNetLlama(config).count_parameters()
+        model = BitNetLlama(config)
+        counts = model.count_parameters()
+        cached = [module for _, module in model.bitlinear_named_modules() if module.fp8_cache_weights]
     directions = 2 if config.fp8_backward != "bf16" else 1
-    cache_bytes = counts["ternary"] * directions + counts["ternary"] // (128 * 128) * 4 * directions if config.fp8_cache_weights else 0
+    cache_bytes = sum(module.weight.numel() * directions + module.alpha_values().numel() * 4 * directions for module in cached)
     return {**counts, "fp8_weight_cache_estimated_bytes": cache_bytes, "fp32_weights_and_gradients_bytes": counts["total"] * 8,
             "adamw_fp32_training_state_bytes_excluding_activations": counts["total"] * 16,
             "note": "Latent training state is not 1.58-bit; activations, workspaces and communication buffers are additional."}
@@ -30,9 +32,9 @@ def model_numerical_preflight(config, device):
     reduced = replace(config, vocab_size=257, dim=4 * config.head_dim, n_heads=4, n_kv_heads=2,
                       n_layers=config.global_attention_every, ffn_dim=((32 * config.head_dim // 3 + 127) // 128) * 128,
                       max_seq_len=min(35, config.max_seq_len), local_attention_window=min(11, config.local_attention_window),
-                      pad_token_id=0, loss_chunk_size=7, gradient_checkpointing=True)
+                      pad_token_id=0, loss_chunk_size=7)
     optimized = BitNetLlama(reduced).to(device)
-    reference = BitNetLlama(replace(reduced, gradient_checkpointing=False)).to(device)
+    reference = BitNetLlama(replace(reduced, gradient_checkpointing=False, elementwise_backend="torch")).to(device)
     reference.load_state_dict(optimized.state_dict())
     inputs = torch.randint(1, reduced.vocab_size, (1, reduced.max_seq_len), device=device)
     targets = torch.randint(1, reduced.vocab_size, inputs.shape, device=device)
@@ -102,9 +104,23 @@ def run_preflight(config, device):
                 gradients = torch.autograd.grad(result, operands, grad_output)
                 reference_gradients = torch.autograd.grad(expected, reference_operands, grad_output)
                 errors = [relative_error(result, expected)] + [relative_error(actual, target) for actual, target in zip(gradients, reference_gradients)]
-                if not all(error < 0.03 for error in errors):
-                    raise AssertionError(f"attention forward/backward mismatch: {errors}")
-                cases.append({"length": length, "query_length": query_length, "window": window, "relative_errors": errors})
+                accepted = [error < 0.03 for error in errors]
+                if length == 1:
+                    # With one key softmax is identically one: dQ=dK=0.
+                    # BF16 kernels/reference can leave sub-micro absolute
+                    # residuals; a ratio between those residuals is undefined
+                    # as an accuracy measure. Test the analytical zero instead.
+                    for index in (0, 1):
+                        accepted[index + 1] = max(float(gradients[index].abs().max()),
+                                                  float(reference_gradients[index].abs().max())) < 1e-6
+                if not all(accepted):
+                    details = [{"reference_norm": float(reference.double().norm()),
+                                "max_absolute_error": float((actual.double() - reference.double()).abs().max())}
+                               for actual, reference in zip([result, *gradients], [expected, *reference_gradients])]
+                    raise AssertionError(f"attention forward/backward mismatch: length={length}, query_length={query_length}, "
+                                         f"window={window}, relative_errors={errors}, details={details}")
+                cases.append({"length": length, "query_length": query_length, "window": window, "relative_errors": errors,
+                              "qk_analytical_zero_atol": 1e-6 if length == 1 else None})
     deepgemm = run_fp8_preflight(config, device) if config.linear_backend == "deepgemm" else None
     model_numerics = model_numerical_preflight(config, device)
     torch.cuda.synchronize(device)

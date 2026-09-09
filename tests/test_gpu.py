@@ -9,6 +9,13 @@ from tests.helpers import tiny_config
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA unavailable: these are mandatory hardware gates, not certified passes")
 class GPUPreflightTests(unittest.TestCase):
+    def test_fused_norm_swiglu_and_streaming_ternary_head(self):
+        config = tiny_config(dim=128, n_heads=2, n_kv_heads=1, max_seq_len=32, attention_backend="fa3",
+                             learned_norms=False, ternary_embeddings=True, loss_backend="streaming",
+                             elementwise_backend="inductor", fused_projections=True)
+        result = run_preflight(config, torch.device("cuda", 0))
+        self.assertEqual(result["status"], "passed")
+
     def test_flex_forward_backward_and_cached_offsets(self):
         config = tiny_config(dim=128, n_heads=2, n_kv_heads=1, max_seq_len=32, attention_backend="flex")
         result = run_preflight(config, torch.device("cuda", 0))

@@ -239,3 +239,14 @@ class TrainingTests(unittest.TestCase):
                         self.assertEqual(restored, value)
             for name, weights in expected["model"].items():
                 torch.testing.assert_close(actual["model"][name], weights, rtol=2e-4, atol=2e-6)
+
+    def test_real_token_benchmark_stream(self):
+        from terminus.benchmark import training_benchmark
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tokens.bin"
+            np.arange(80, dtype=np.uint16).tofile(path)
+            report = training_benchmark("configs/development.json", batch_size=1, warmup_steps=0,
+                                        measured_steps=1, tokens_path=path)
+            self.assertEqual(report["token_source"], str(path))
+            self.assertGreater(report["tokens_per_second"], 0)

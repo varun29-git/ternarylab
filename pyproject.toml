@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "terminus-bitnet"
 version = "0.1.0"
 requires-python = ">=3.10"
-dependencies = ["torch>=2.8,<3", "numpy>=1.26,<3", "sentencepiece==0.2.1", "protobuf>=4.25,<7"]
+dependencies = ["torch>=2.8,<3", "numpy>=1.26,<3", "sentencepiece==0.2.1", "protobuf>=4.25,<7", "huggingface-hub>=0.23,<1", "tokenizers>=0.20,<1", "regex>=2024.11.6,<2027"]
 
 [tool.setuptools.packages.find]
 include = ["terminus*"]

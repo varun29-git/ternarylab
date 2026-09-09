@@ -79,6 +79,16 @@ class FP8PathTests(unittest.TestCase):
         torch.testing.assert_close(dequantize_weight_fp8_e4m3_2d(*primary).T,
                                    dequantize_weight_fp8_e4m3_2d(*secondary), rtol=0, atol=0)
 
+    def test_triton_ternary_transpose_is_dense_and_matches_primary(self):
+        if not torch.cuda.is_available() or torch.cuda.get_device_capability()[0] != 9:
+            self.skipTest("fused ternary quantizer is Hopper-only")
+        weights = torch.randn(5120, 1920, device="cuda")
+        primary, secondary = quantize_ternary_directions(weights, transposed=True, backend="triton")
+        self.assertFalse(torch.isnan(primary[0].float()).any())
+        self.assertFalse(torch.isnan(secondary[0].float()).any())
+        self.assertTrue(torch.equal(primary[0].float().T, secondary[0].float()))
+        torch.testing.assert_close(primary[1].T, secondary[1], rtol=0, atol=0)
+
     def test_all_backward_modes_and_tail_shapes(self):
         for mode in ("bf16", "dgrad", "full"):
             for rows in (1, 7, 128, 257):
@@ -215,7 +225,9 @@ class FP8PathTests(unittest.TestCase):
         self.assertEqual(reference.linear_backend, "torch")
         for config in (full, conservative, reference):
             self.assertEqual(config.weight_scale_layout, "blockwise")
-            self.assertEqual(count_model(config)["total"], 1502210108)
+            self.assertEqual(count_model(config)["total"], 1445062716)
+            self.assertEqual(config.vocab_size, 68096)
+            self.assertEqual(config.local_attention_window, 512)
         self.assertEqual(count_model(full)["fp8_weight_cache_estimated_bytes"], 2611591680)
         self.assertEqual(count_model(reference)["fp8_weight_cache_estimated_bytes"], 0)
         for variant in VARIANTS:

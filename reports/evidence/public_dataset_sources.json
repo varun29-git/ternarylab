@@ -1,0 +1,42 @@
+{
+  "retrieved_at_utc": "2026-09-09T11:47:26.008962+00:00",
+  "scope": "Repository metadata and dataset cards were fetched successfully. Does not certify full data availability, usage rights for underlying documents, post-filter token stocks, or quality.",
+  "datasets": [
+    {
+      "repository": "ai4bharat/sangraha",
+      "revision": "8b813c3f62d37b2fa174d68c31e8b35ae2fe85e8",
+      "readme_url": "https://huggingface.co/datasets/ai4bharat/sangraha/raw/8b813c3f62d37b2fa174d68c31e8b35ae2fe85e8/README.md",
+      "http_status": 200,
+      "readme_sha256": "93803f5c71a78da1a22ddf1753f0e4114cb837b3ac8e789b4ec2a88a12ddb637",
+      "gated": false,
+      "license": "cc-by-4.0"
+    },
+    {
+      "repository": "HuggingFaceFW/fineweb-edu",
+      "revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9",
+      "readme_url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/raw/87f09149ef4734204d70ed1d046ddc9ca3f2b8f9/README.md",
+      "http_status": 200,
+      "readme_sha256": "a0cc8998a20499432b28b6575f3046b714938eb8e11b8d59a1d25ddf3716061e",
+      "gated": false,
+      "license": "odc-by"
+    },
+    {
+      "repository": "HuggingFaceFW/fineweb-edu-score-2",
+      "revision": "74a19fcb9c3b0aadb0e000d16838be8c52054ae6",
+      "readme_url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu-score-2/raw/74a19fcb9c3b0aadb0e000d16838be8c52054ae6/README.md",
+      "http_status": 200,
+      "readme_sha256": "880d833b023fc769bc24c5bb226f4b321efed3fb7df2d65be60989b719ae43bb",
+      "gated": false,
+      "license": "odc-by"
+    },
+    {
+      "repository": "HuggingFaceTB/smollm-corpus",
+      "revision": "3ba9d605774198c5868892d7a8deda78031a781f",
+      "readme_url": "https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus/raw/3ba9d605774198c5868892d7a8deda78031a781f/README.md",
+      "http_status": 200,
+      "readme_sha256": "e09544d7132303ae6bbc6e156e984db0305d81561615476be49eabd4be4b8bed",
+      "gated": false,
+      "license": "odc-by"
+    }
+  ]
+}

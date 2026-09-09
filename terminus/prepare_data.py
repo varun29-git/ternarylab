@@ -17,6 +17,23 @@ from .integrity import file_sha256, write_json_atomic
 from .tokenizer import encode_text, load_tokenizer, normalize_text, records, tokenizer_contract
 
 
+def install_tokenizer(tokenizer_path, output_dir):
+    source = Path(tokenizer_path)
+    if source.is_dir():
+        destination = output_dir / "tokenizer"
+        shutil.copytree(source, destination)
+        for path in sorted(destination.rglob("*")):
+            if path.is_file():
+                with path.open("rb") as handle:
+                    os.fsync(handle.fileno())
+        return "tokenizer"
+    destination = output_dir / source.name
+    shutil.copyfile(source, destination)
+    with destination.open("rb") as handle:
+        os.fsync(handle.fileno())
+    return destination.name
+
+
 def prepare_data(corpus, tokenizer_path, output_dir, *, source_mix, total_train_tokens,
                  seq_len=4096, batch_size=1, shard_tokens=10_000_000):
     if shard_tokens <= 0:
@@ -26,9 +43,7 @@ def prepare_data(corpus, tokenizer_path, output_dir, *, source_mix, total_train_
         raise FileExistsError("data preparation requires an empty output directory")
     output_dir.mkdir(parents=True, exist_ok=True)
     tokenizer = load_tokenizer(tokenizer_path)
-    shutil.copyfile(tokenizer_path, output_dir / "tokenizer.model")
-    with (output_dir / "tokenizer.model").open("rb") as handle:
-        os.fsync(handle.fileno())
+    relative = install_tokenizer(tokenizer_path, output_dir)
     dtype = np.uint16 if tokenizer.get_piece_size() <= 65536 else np.uint32
     token_dtype = np.dtype(dtype).name
     database = sqlite3.connect(output_dir / "document_hashes.sqlite")
@@ -97,8 +112,8 @@ def prepare_data(corpus, tokenizer_path, output_dir, *, source_mix, total_train_
         config = TokenDataConfig(seq_len=seq_len, batch_size=batch_size, total_train_tokens=total_train_tokens,
                                  validation_tokens=sum(max(0, count - 1) for (language, split), count in totals.items() if split == "val"),
                                  token_dtype=token_dtype, source_mix=source_mix)
-        contract = tokenizer_contract(tokenizer, output_dir / "tokenizer.model")
-        contract["path"] = "tokenizer.model"
+        contract = tokenizer_contract(tokenizer, output_dir / relative)
+        contract["path"] = relative
         provenance = {"normalization": "NFC", "packing": "continuous_eos", "document_dedup": "sha256_nfc",
                       "licenses": licenses, "corpus_sha256": file_sha256(corpus), "duplicate_documents_removed": duplicate_documents,
                       "documents": {f"{language}/{split}": count for (language, split), count in documents.items()}}

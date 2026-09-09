@@ -12,6 +12,7 @@ from terminus.integrity import LANGUAGES, validate_manifest
 from terminus.model import BitNetLlamaConfig
 from terminus.prepare_data import prepare_data
 from terminus.tokenizer import audit_tokenizer, encode_text, load_tokenizer, normalize_text, tokenizer_contract, train_tokenizer
+from terminus.tokenizer_compare import compare
 from tests.helpers import tiny_config
 
 
@@ -75,6 +76,14 @@ class TokenizerTests(unittest.TestCase):
         result = audit_tokenizer(self.model_path, extra)
         self.assertGreater(result["languages"]["en"]["byte_fallback_tokens"], 0)
 
+    def test_fertility_uses_graphemes_and_identical_comparison_corpus(self):
+        result = compare(self.model_path, self.model_path, self.corpus)
+        for language, stats in result["languages"].items():
+            self.assertEqual(stats["token_reduction_fraction"], 0)
+            self.assertGreater(stats["candidate"]["tokens_per_whitespace_word"], 0)
+            if language != "en":
+                self.assertLess(stats["candidate"]["graphemes"], stats["candidate"]["codepoints"])
+
     def test_prepare_records_eos_dedup_and_storage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -131,3 +140,28 @@ class TokenizerTests(unittest.TestCase):
         self.assertEqual(contract["pad_token_id"], 0)
         self.assertEqual(contract["eos_token_id"], 1)
         self.assertEqual(len(contract["sha256"]), 64)
+
+
+class HuggingFaceTokenizerAdapterTests(unittest.TestCase):
+    def test_huggingface_encode_skips_roundtrip_but_rejects_unk(self):
+        class Fake:
+            kind = "huggingface"
+
+            def get_piece_size(self):
+                return 8
+
+            def unk_id(self):
+                return 7
+
+            def encode(self, text, out_type=int):
+                del text, out_type
+                return [1, 2, 3]
+
+            def decode(self, tokens):
+                del tokens
+                return "not a round trip"
+
+        self.assertEqual(encode_text(Fake(), "hello"), [1, 2, 3])
+        Fake.encode = lambda self, text, out_type=int: [7]
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            encode_text(Fake(), "hello")

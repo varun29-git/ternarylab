@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as functional
 
 from .model import BitLinear
 from .quantization import (
@@ -49,6 +50,11 @@ def reference_linear(values, weight, gradient, mode):
 
 
 def projection_shapes(config):
+    if config.fused_projections:
+        return {"query_key_value": (config.dim + 2 * config.n_kv_heads * config.head_dim, config.dim),
+                "output": (config.dim, config.dim),
+                "gate_up": ((2 if config.ffn_activation == "swiglu" else 1) * config.ffn_dim, config.dim),
+                "down": (config.dim, config.ffn_dim)}
     return {"query_output": (config.dim, config.dim),
             "key_value": (config.n_kv_heads * config.head_dim, config.dim),
             "gate_up": (config.ffn_dim, config.dim), "down": (config.dim, config.ffn_dim)}
@@ -56,15 +62,47 @@ def projection_shapes(config):
 
 def validate_quantizers(backend, device):
     errors = []
+    tie_mismatch_rates = []
+
+    def verify_tie_compatible(source, native, reference):
+        """Certify the only allowed native/torch FP8 difference: an exact tie."""
+        native_codes, native_scales = native
+        reference_codes, reference_scales = reference
+        if not torch.allclose(native_scales, reference_scales, rtol=1e-6, atol=1e-9):
+            raise AssertionError("fused FP8 quantizer changed its block scales")
+        native_values, reference_values = native_codes.float(), reference_codes.float()
+        mismatch = native_values != reference_values
+        tie_mismatch_rates.append(float(mismatch.float().mean()))
+        if not bool(mismatch.any()):
+            return
+        # All finite E4M3 values are enumerated directly from their bit
+        # patterns.  Differing results must be adjacent representable values.
+        bit_patterns = torch.arange(256, device=device, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
+        codebook = torch.unique(bit_patterns[torch.isfinite(bit_patterns)], sorted=True)
+        native_index = torch.searchsorted(codebook, native_values[mismatch])
+        reference_index = torch.searchsorted(codebook, reference_values[mismatch])
+        if not bool((native_index - reference_index).abs().eq(1).all()):
+            raise AssertionError("fused FP8 quantizer differs by more than one E4M3 neighbor")
+        expanded_scales = reference_scales.repeat_interleave(128, dim=1)[:, :source.shape[1]]
+        normalized = source.float() / expanded_scales
+        midpoint = (native_values + reference_values) / 2
+        # BF16 inputs and FP32 division leave at most two FP32 ULPs at the
+        # midpoint of the two FP8 neighbors.  This proves a tie-rule choice,
+        # rather than a change in scale or quantization interval.
+        if not bool((normalized[mismatch] - midpoint[mismatch]).abs().le(4e-5).all()):
+            raise AssertionError("fused FP8 quantizer mismatch is not an exact rounding tie")
+
     for rows in (7, 128, 257):
         for magnitude in (0., 1e-12, 1.):
             inputs = (torch.randn(rows, 256, device=device) * magnitude).bfloat16()
             actual = quantize_fp8_directions(inputs, transposed=True, eps=0, backend=backend)
             expected = quantize_fp8_directions(inputs, transposed=True, eps=0)
-            for native, reference in zip(actual, expected):
+            sources = (inputs, functional.pad(inputs.T, (0, (-inputs.shape[0]) % 128)).contiguous())
+            for source, native, reference in zip(sources, actual, expected):
+                verify_tie_compatible(source, native, reference)
                 error = relative_error(dequantize_activation_fp8_e4m3(*native),
                                        dequantize_activation_fp8_e4m3(*reference))
-                if not error < .002:
+                if not error < .01:
                     raise AssertionError(f"fused FP8 quantizer disagrees with its reference: {error}")
                 errors.append(error)
     weights = torch.randn(256, 384, device=device)
@@ -82,7 +120,7 @@ def validate_quantizers(backend, device):
         operand, _ = quantize_ternary_directions(weights, backend=backend)
         if torch.isfinite(dequantize_weight_fp8_e4m3_2d(*operand)).all():
             raise AssertionError("ternary quantization silently sanitized a nonfinite latent weight")
-    return {"max_directional_error": max(errors), "ternary_error": weight_error,
+    return {"max_directional_error": max(errors), "max_tie_mismatch_rate": max(tie_mismatch_rates), "ternary_error": weight_error,
             "tiny_gradients": "passed", "nonfinite_propagation": "passed"}
 
 

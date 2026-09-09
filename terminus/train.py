@@ -45,19 +45,29 @@ class TrainConfig:
     log_interval: int = 10
     compile: bool = False
     time_limit_seconds: float | None = None
+    ddp_bucket_cap_mb: int = 128
+    expected_world_size: int | None = None
+    expected_parameters: int | None = None
+    expected_train_tokens: int | None = None
+    expected_batch_size: int | None = None
+    validate_manifest_once_per_node: bool = False
 
     def __post_init__(self):
-        for name in ("development_mode", "compile"):
+        for name in ("development_mode", "compile", "validate_manifest_once_per_node"):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be a boolean")
         if self.device not in {"cpu", "cuda"} or self.dtype not in {"fp32", "bf16"}:
             raise ValueError("trainer supports CPU FP32 and CUDA BF16/FP32, not FP16 latent updates")
         if self.device == "cpu" and self.dtype != "fp32":
             raise ValueError("CPU training is an FP32 correctness reference")
-        for name in ("gradient_accumulation_steps", "prefetch_batches", "checkpoint_interval", "validation_interval", "validation_batches_per_language", "log_interval"):
+        for name in ("gradient_accumulation_steps", "prefetch_batches", "checkpoint_interval", "validation_interval", "validation_batches_per_language", "log_interval", "ddp_bucket_cap_mb"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        for name in ("expected_world_size", "expected_parameters", "expected_train_tokens", "expected_batch_size"):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise ValueError(f"{name} must be None or a positive integer")
         for name in ("warmup_tokens", "quantization_warmup_tokens"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -209,6 +219,13 @@ def run_training(config_path, manifest_path, data_root, output_dir, *, resume=No
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if world_size <= 0 or not 0 <= rank < world_size:
         raise ValueError("invalid distributed rank/world size")
+    if training.expected_world_size is not None and world_size != training.expected_world_size:
+        raise ValueError("world size violates the fixed hardware allocation")
+    if training.expected_parameters is not None:
+        with torch.device("meta"):
+            actual_parameters = BitNetLlama(model_config).count_parameters()["total"]
+        if actual_parameters != training.expected_parameters:
+            raise ValueError("model violates the exact parameter budget")
     if training.device == "cuda":
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but unavailable")
@@ -229,8 +246,18 @@ def run_training(config_path, manifest_path, data_root, output_dir, *, resume=No
     old_handlers = {}
     try:
         manifest = TokenManifest.load(manifest_path)
-        manifest_report = validate_manifest(manifest, data_root, model_config, development_mode=training.development_mode)
+        if training.validate_manifest_once_per_node:
+            from .distributed_utils import validate_node_manifest
+
+            manifest_report = validate_node_manifest(manifest, data_root, model_config, development_mode=training.development_mode)
+        else:
+            manifest_report = validate_manifest(manifest, data_root, model_config, development_mode=training.development_mode)
         total_tokens = manifest.config.usable_train_tokens
+        if training.expected_train_tokens is not None and (
+                total_tokens != training.expected_train_tokens or manifest.config.total_train_tokens != total_tokens):
+            raise ValueError("manifest violates the exact training token budget")
+        if training.expected_batch_size is not None and manifest.config.batch_size != training.expected_batch_size:
+            raise ValueError("manifest violates the per-rank microbatch size")
         if training.warmup_tokens >= total_tokens:
             raise ValueError("warmup token budget must be shorter than the total budget")
         if training.quantization_warmup_tokens > total_tokens:
@@ -280,7 +307,8 @@ def run_training(config_path, manifest_path, data_root, output_dir, *, resume=No
         forward_model = torch.compile(model) if training.compile else model
         if world_size > 1:
             forward_model = DistributedDataParallel(forward_model, device_ids=[local_rank] if device.type == "cuda" else None,
-                                                    broadcast_buffers=False, gradient_as_bucket_view=True)
+                                                    broadcast_buffers=False, gradient_as_bucket_view=True,
+                                                    bucket_cap_mb=training.ddp_bucket_cap_mb)
         if payload is not None:
             if len(payload["rank_rng"]) != world_size:
                 raise ValueError("checkpoint rank RNG states do not match world size")

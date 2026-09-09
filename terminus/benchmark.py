@@ -6,12 +6,15 @@ import math
 import statistics
 import time
 from dataclasses import asdict
+from pathlib import Path
 
+import numpy as np
 import torch
 
 from .checkpoint import validate_finite_state
 from .integrity import fingerprint, source_hashes, write_json_atomic
 from .model import BitNetLlama, chunked_cross_entropy_sum, linear_cross_entropy_sum
+from .loss import streaming_cross_entropy_sum
 from .optim import build_optimizer
 from .preflight import validate_preflight_report
 from .train import load_config, runtime_contract
@@ -26,8 +29,16 @@ def loss_memory_benchmark(*, tokens=1024, vocabulary=4096, width=128, chunk_size
     targets = torch.randint(vocabulary, (tokens,))
     excluded = {value.untyped_storage().data_ptr() for value in (hidden, weight, targets)}
     cases, gradients = {}, {}
-    for name in ("full", "chunked"):
+    for name in ("full", "chunked", "streaming"):
         saved = {}
+
+        def compute_loss():
+            return (linear_cross_entropy_sum(hidden, weight, targets) if name == "full" else
+                    {"chunked": chunked_cross_entropy_sum, "streaming": streaming_cross_entropy_sum}[name](hidden, weight, targets, chunk_size))
+
+        for _ in range(2):
+            compute_loss().backward()
+            hidden.grad = weight.grad = None
 
         def pack(value):
             storage = value.untyped_storage()
@@ -37,8 +48,7 @@ def loss_memory_benchmark(*, tokens=1024, vocabulary=4096, width=128, chunk_size
 
         started = time.perf_counter()
         with torch.autograd.graph.saved_tensors_hooks(pack, lambda value: value):
-            loss = (linear_cross_entropy_sum(hidden, weight, targets) if name == "full" else
-                    chunked_cross_entropy_sum(hidden, weight, targets, chunk_size))
+            loss = compute_loss()
         retained_bytes = sum(saved.values())
         loss.backward()
         elapsed = time.perf_counter() - started
@@ -49,25 +59,63 @@ def loss_memory_benchmark(*, tokens=1024, vocabulary=4096, width=128, chunk_size
     gradient_errors = [float((actual - expected).abs().max()) for actual, expected in zip(gradients["chunked"], gradients["full"])]
     for actual, expected in zip(gradients["chunked"], gradients["full"]):
         torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)
+    for actual, expected in zip(gradients["streaming"], gradients["full"]):
+        torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-4)
     return {"device": "cpu", "torch": str(torch.__version__), "tokens": tokens, "vocabulary": vocabulary,
-            "width": width, "chunk_size": chunk_size, "cases": cases, "max_gradient_absolute_errors": gradient_errors,
-            "scope": "Unique extra tensor storage retained by autograd after the loss forward, excluding shared inputs/weights/targets; NOT peak process/GPU memory. Chunked backward recomputes logits and trades compute for retention."}
+            "width": width, "chunk_size": chunk_size, "warmup_iterations_per_case": 2,
+            "cases": cases, "max_gradient_absolute_errors": gradient_errors,
+            "scope": "Unique extra tensor storage retained by autograd after loss forward, excluding shared inputs/weights/targets; NOT peak process/GPU memory. Chunked backward recomputes logits. Streaming retains input/weight gradients and avoids that recomputation. CPU timing is not evidence of a GPU speedup."}
 
 
-def training_benchmark(config_path, *, batch_size=1, warmup_steps=2, measured_steps=5, preflight_report=None):
+def load_real_token_stream(path, vocab_size):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError("token file does not exist")
+    dtype = np.uint32 if vocab_size > 65536 else np.uint16
+    tokens = np.fromfile(path, dtype=dtype)
+    if tokens.size == 0:
+        raise ValueError("token file is empty")
+    if int(tokens.min()) < 0 or int(tokens.max()) >= vocab_size:
+        raise ValueError("token file contains IDs outside the model vocabulary")
+    return tokens.astype(np.int64, copy=False)
+
+
+class TokenStream:
+    def __init__(self, tokens, seq_len, batch_size):
+        if tokens.shape[0] < seq_len + 1:
+            raise ValueError("token stream is shorter than one training sequence")
+        self.tokens, self.seq_len, self.batch_size, self.offset = tokens, seq_len, batch_size, 0
+
+    def next_batch(self, device):
+        rows = []
+        for _ in range(self.batch_size):
+            if self.offset + self.seq_len + 1 > self.tokens.shape[0]:
+                self.offset = 0
+            rows.append(self.tokens[self.offset:self.offset + self.seq_len + 1])
+            self.offset += self.seq_len
+        windows = torch.as_tensor(np.stack(rows), device=device, dtype=torch.long)
+        return windows[:, :-1].contiguous(), windows[:, 1:].contiguous()
+
+
+def training_benchmark(config_path, *, batch_size=1, warmup_steps=2, measured_steps=5, preflight_report=None, tokens_path=None):
     if batch_size <= 0 or warmup_steps < 0 or measured_steps <= 0:
         raise ValueError("invalid benchmark batch or step count")
     config, training, optimizer_config = load_config(config_path)
     device = torch.device(training.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("the configured CUDA runtime is unavailable")
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
     if not training.development_mode:
         validate_preflight_report(preflight_report, config, device)
     torch.manual_seed(training.seed)
     model = BitNetLlama(config).to(device).train()
     optimizer = build_optimizer(model, optimizer_config)
     forward_model = torch.compile(model) if training.compile else model
-    inputs = torch.randint(config.vocab_size, (batch_size, config.max_seq_len + 1), device=device)
+    stream = (TokenStream(load_real_token_stream(tokens_path, config.vocab_size), config.max_seq_len, batch_size)
+              if tokens_path is not None else None)
     amp_dtype = torch.bfloat16 if training.dtype == "bf16" else torch.float32
     durations, losses, gradient_norms = [], [], []
     tokens_per_update = batch_size * config.max_seq_len * training.gradient_accumulation_steps
@@ -84,8 +132,13 @@ def training_benchmark(config_path, *, batch_size=1, warmup_steps=2, measured_st
         optimizer.zero_grad(set_to_none=True)
         loss_value = torch.zeros((), device=device)
         for _ in range(training.gradient_accumulation_steps):
+            if stream is None:
+                inputs = torch.randint(config.vocab_size, (batch_size, config.max_seq_len), device=device)
+                targets = torch.randint(config.vocab_size, (batch_size, config.max_seq_len), device=device)
+            else:
+                inputs, targets = stream.next_batch(device)
             with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp_dtype != torch.float32):
-                output = forward_model(inputs[:, :-1], inputs[:, 1:], return_logits=False)
+                output = forward_model(inputs, targets, return_logits=False)
                 loss = output["loss"] / training.gradient_accumulation_steps
             loss.backward()
             loss_value += loss.detach()
@@ -96,7 +149,7 @@ def training_benchmark(config_path, *, batch_size=1, warmup_steps=2, measured_st
         synchronize()
         duration = time.perf_counter() - started
         if not math.isfinite(float(loss_value)):
-            raise FloatingPointError("nonfinite synthetic benchmark loss")
+            raise FloatingPointError("nonfinite benchmark loss")
         if step >= warmup_steps:
             durations.append(duration)
             losses.append(float(loss_value))
@@ -104,12 +157,13 @@ def training_benchmark(config_path, *, batch_size=1, warmup_steps=2, measured_st
     validate_finite_state((model.state_dict(), optimizer.state_dict()))
     return {"model_sha256": fingerprint(asdict(config)), "source": source_hashes(), "runtime": runtime_contract(device),
             "counts": model.count_parameters(), "batch_size": batch_size, "tokens_per_update": tokens_per_update,
+            "token_source": str(tokens_path) if tokens_path is not None else "synthetic_randint",
             "warmup_steps": warmup_steps, "measured_steps": measured_steps, "step_seconds": durations,
             "median_step_seconds": statistics.median(durations), "tokens_per_second": tokens_per_update * measured_steps / sum(durations),
             "losses": losses, "gradient_norms": gradient_norms,
             "peak_allocated_bytes": torch.cuda.max_memory_allocated(device) if device.type == "cuda" else None,
             "peak_reserved_bytes": torch.cuda.max_memory_reserved(device) if device.type == "cuda" else None,
-            "scope": "Single-device synthetic full-model forward/backward/optimizer, including gradient accumulation; excludes data IO, distributed communication, evaluation and checkpoint costs. Not a quality or long-soak result."}
+            "scope": "Single-device full-model forward/backward/optimizer, including gradient accumulation; excludes distributed communication, evaluation and checkpoint costs. Real --tokens files still exclude host data-loader overhead. Not a quality or long-soak result."}
 
 
 def main():
@@ -121,6 +175,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--warmup-steps", type=int, default=2)
     parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument("--tokens")
     parser.add_argument("--threads", type=int, default=1)
     args = parser.parse_args()
     if args.threads <= 0:
@@ -132,7 +187,7 @@ def main():
         if not args.config:
             parser.error("training requires --config")
         result = training_benchmark(args.config, batch_size=args.batch_size, warmup_steps=args.warmup_steps,
-                                    measured_steps=args.steps, preflight_report=args.preflight_report)
+                                    measured_steps=args.steps, preflight_report=args.preflight_report, tokens_path=args.tokens)
     if args.output:
         write_json_atomic(args.output, result)
     print(json.dumps(result, indent=2, allow_nan=False))

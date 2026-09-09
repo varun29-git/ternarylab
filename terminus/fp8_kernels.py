@@ -105,10 +105,11 @@ def quantize_ternary(weight, *, transposed=False):
     rows, width = weight.shape
     primary = (torch.empty((rows, width), device=weight.device, dtype=torch.float8_e4m3fn),
                torch.empty((rows // 128, width // 128), device=weight.device, dtype=torch.float32))
-    secondary = (torch.empty((width, rows), device=weight.device, dtype=torch.float8_e4m3fn),
-                 torch.empty((width // 128, rows // 128), device=weight.device, dtype=torch.float32)) if transposed else None
-    transposed_codes, transposed_scales = secondary if transposed else primary
+    # Fused WRITE_TRANSPOSE leaves holes in the packed NT layout; dgrad then
+    # reads those as E4M3 NaNs and poisons activation gradients. Materialize
+    # the transpose from the dense primary codes, matching the torch quantizer.
     _quantize_ternary_kernel[(rows // 128, width // 128)](
-        weight, *primary, transposed_codes, transposed_scales, rows, width,
-        weight.stride(0), weight.stride(1), transposed, num_warps=8, enable_fp_fusion=False)
+        weight, *primary, primary[0], primary[1], rows, width,
+        weight.stride(0), weight.stride(1), False, num_warps=8, enable_fp_fusion=False)
+    secondary = (primary[0].T.contiguous(), primary[1].T.contiguous()) if transposed else None
     return primary, secondary

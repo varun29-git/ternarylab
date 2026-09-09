@@ -123,7 +123,9 @@ class ModelTests(unittest.TestCase):
         with torch.device("meta"):
             self.assertEqual(BitNetLlama().count_parameters()["total"], 150436648)
             candidate, _, _ = load_config("configs/1.5b_candidate.json")
-            self.assertEqual(BitNetLlama(candidate).count_parameters()["total"], 1502210108)
+            self.assertEqual(BitNetLlama(candidate).count_parameters()["total"], 1445062716)
+            self.assertEqual(candidate.vocab_size, 68096)
+            self.assertEqual(candidate.local_attention_window, 512)
 
     def test_bad_configuration(self):
         for options in ({"n_heads": 0}, {"n_layers": 3}, {"dim": 30}, {"rms_norm_eps": math.nan},

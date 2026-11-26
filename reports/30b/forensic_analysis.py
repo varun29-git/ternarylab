@@ -17,7 +17,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,7 +25,11 @@ import numpy as np
 
 RUN_ID = "fresh-h100-curriculum-30b-rmsmatch-b28-nativealloc-20260731T200059Z"
 HERE = Path(__file__).resolve().parent
-ROOT = HERE / "source_artifacts" / RUN_ID
+ROOT = HERE.parents[1] / "provenance" / "30b-run"
+if (ROOT / "RUN_ID.json").is_file():
+    recorded_run_id = json.loads((ROOT / "RUN_ID.json").read_text())["run_id"]
+    if recorded_run_id != RUN_ID:
+        raise RuntimeError(f"run identity mismatch: expected {RUN_ID}, got {recorded_run_id}")
 OUT = HERE / "forensic_outputs"
 FIG = HERE / "figures"
 TOKENS_PER_STEP = 114_688
@@ -292,7 +296,6 @@ def resume_analysis(raw_train: list[dict[str, Any]], raw_val: list[dict[str, Any
         datetime.fromisoformat(right["time_generated"])
         - datetime.fromisoformat(left["time_generated"])
     ).total_seconds()
-    start_step = int(right["step"]) - (int(right["step"]) % 100) - 64
     replay_from = 33_136
     abandoned_high = int(left["step"])
     replay_steps = abandoned_high - replay_from
@@ -548,6 +551,17 @@ def make_figures(
 
 
 def main() -> None:
+    missing_evaluations = [
+        ROOT / "evaluations" / checkpoint / task / "result.json"
+        for checkpoint in ("ckpt_step_209264.pt", "ckpt_final.pt")
+        for task in ("arc_easy", "hellaswag", "lambada", "sciq", "winogrande")
+        if not (ROOT / "evaluations" / checkpoint / task / "result.json").is_file()
+    ]
+    if missing_evaluations:
+        raise FileNotFoundError(
+            "required downstream evidence is absent; refusing partial forensic regeneration:\n"
+            + "\n".join(str(path) for path in missing_evaluations)
+        )
     OUT.mkdir(parents=True, exist_ok=True)
     raw_train = read_jsonl(ROOT / "logs" / "train.jsonl")
     raw_val = read_jsonl(ROOT / "logs" / "validation.jsonl")

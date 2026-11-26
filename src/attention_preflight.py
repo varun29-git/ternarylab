@@ -7,7 +7,7 @@ import statistics
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import torch
 
@@ -311,9 +311,12 @@ def median_kernel_measurement(
     if backend == "flex":
         clear_flex_block_mask_cache()
         runner = _compiled_flex_runner(window, float(softcap))
-        invoke = lambda: runner(q, k, v)
+
+        def invoke() -> torch.Tensor:
+            return runner(q, k, v)
     else:
-        invoke = lambda: backend_output(backend, q, k, v, local_window=window)
+        def invoke() -> torch.Tensor:
+            return backend_output(backend, q, k, v, local_window=window)
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     cold_baseline = torch.cuda.memory_allocated()

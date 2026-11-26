@@ -6,7 +6,7 @@ import queue
 import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -409,7 +409,9 @@ class TrainingTokenRouter:
                     [spec for spec in train_specs if spec.source == source],
                     root=root,
                 )
-                required_examples = self._source_count_before(source, total_examples)
+                required_examples = self._source_count_before(
+                    source, total_examples, self.mix_schedule
+                )
                 span.assert_budget(required_examples * self.config.seq_len, name=source)
                 self.mixed_spans[source] = span
             self.main = None

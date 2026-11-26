@@ -9,11 +9,10 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import os
 import statistics
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
 import torch
 import torch._dynamo
@@ -151,7 +150,8 @@ def run_throughput_test(
     peak_memory_gb = torch.cuda.max_memory_allocated() / 1e9
 
     # Cleanup
-    del forward_model, optimizer, model, input_ids, targets, token_stream
+    forward_model = optimizer = model = input_ids = targets = None
+    del token_stream
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -189,8 +189,8 @@ def find_max_batch_size(
             result = run_throughput_test(batch_size=bs, seq_len=seq_len, steps=2, warmup_steps=1, **kwargs)
             print(f"OK ({result['peak_memory_gb']:.2f} GB)")
             return bs
-        except torch.cuda.OutOfMemoryError as e:
-            print(f"OOM")
+        except torch.cuda.OutOfMemoryError:
+            print("OOM")
             torch.cuda.empty_cache()
             gc.collect()
             continue
@@ -219,14 +219,14 @@ def main():
 
     # GPU info
     gpu_info = get_gpu_info()
-    print(f"\nGPU Info:")
+    print("\nGPU Info:")
     print(f"  Available: {gpu_info['available']}")
     if gpu_info['available']:
         print(f"  Name: {gpu_info['name']}")
         print(f"  Memory: {gpu_info['total_memory_gb']:.2f} GB")
         print(f"  Compute Capability: {gpu_info['compute_capability']}")
 
-    print(f"\nTarget: 300,000+ tokens/sec")
+    print("\nTarget: 300,000+ tokens/sec")
     print(f"Sequence length: {args.seq_len}")
     print()
 
@@ -279,9 +279,9 @@ def main():
                 print(f"  Memory: {result['peak_memory_gb']:.2f} GB")
 
                 if result['tokens_per_s'] >= 300000:
-                    print(f"  ✓ TARGET ACHIEVED!")
+                    print("  ✓ TARGET ACHIEVED!")
                 else:
-                    print(f"  ✗ Below target (need 300k+)")
+                    print("  ✗ Below target (need 300k+)")
 
             except Exception as e:
                 print(f"  FAILED: {e}")
@@ -301,7 +301,7 @@ def main():
             print(f"{r['config_name']:<30} {r['batch_size']:>6} {r['tokens_per_s']:>11,.0f}{target_marker} {r['median_step_s']*1000:>9.2f} {r['peak_memory_gb']:>9.2f}")
 
         best = max(results, key=lambda x: x['tokens_per_s'])
-        print(f"\nBest configuration:")
+        print("\nBest configuration:")
         print(f"  Config: {best['config_name']}")
         print(f"  Batch size: {best['batch_size']}")
         print(f"  Throughput: {best['tokens_per_s']:,.0f} tokens/sec")

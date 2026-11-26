@@ -22,7 +22,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from model import BitNetLlama, BitNetLlamaConfig
+from model import BitNetLlama, BitNetLlamaConfig  # noqa: E402
 
 
 DEFAULT_DATA_REVISION = "a29ff8e9a04bba4bd6588223785ce105328adc57"

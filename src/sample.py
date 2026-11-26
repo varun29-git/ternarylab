@@ -16,7 +16,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from model import BitNetLlama, BitNetLlamaConfig
+from model import BitNetLlama, BitNetLlamaConfig  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

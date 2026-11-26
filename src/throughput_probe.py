@@ -8,7 +8,7 @@ import os
 import statistics
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import torch
 
@@ -195,7 +195,8 @@ def one_result(args: argparse.Namespace, *, mode: str, batch_size: int) -> Dict[
         "global_attention_every": cfg.global_attention_every,
         "parameter_count": model.count_parameters(),
     }
-    del forward_model, optimizer, model, input_ids, targets, token_stream
+    forward_model = optimizer = model = input_ids = targets = None
+    del token_stream
     torch.cuda.empty_cache()
     gc.collect()
     return result

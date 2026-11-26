@@ -55,7 +55,6 @@ class AttentionContractStaticTest(unittest.TestCase):
         self.assertIn('USE_SUBLN="${USE_SUBLN:-1}"', launcher)
 
     def test_training_uses_no_hard_gradient_or_latent_clipping(self) -> None:
-        model = (ROOT / "model.py").read_text()
         train = (ROOT / "train.py").read_text()
         launcher = (ROOT / "run_h100_e2e.sh").read_text()
         self.assertIn("grad_clip: float = 0.0", train)

@@ -1,0 +1,30 @@
+Terminus Flagship 30B
+Copyright 2026 Compact Intelligence Inc.
+
+The original source code, documentation, report generators, and original
+research reports in this repository are licensed under Apache-2.0. See LICENSE.
+
+Provenance review
+=================
+
+The six files under provenance/30b-run/source/ are the project's frozen
+runtime snapshot. The continuing implementation under src/ wraps the external
+KellerJordan/Muon optimizer and FlashAttention-3 interfaces; it does not vendor
+those projects. PyTorch, NumPy, FlashAttention, Muon, the TinyLlama tokenizer,
+and referenced datasets remain third-party projects under their own licenses.
+No third-party source license texts need to be reproduced here because their
+source code is not redistributed in this repository.
+
+The Apache-2.0 grant covers original project content. It does not relicense
+external checkpoints, token datasets, the TinyLlama tokenizer, or quoted expert
+correspondence. Those external checkpoints and datasets are not included.
+Expert names and quotations are retained as attribution and scientific context,
+not as endorsements. Permission to redistribute private correspondence is not
+documented in the repository and must be confirmed before publishing those
+quotations.
+
+Raw run records under provenance/30b-run/ are historical evidence, not a claim
+that the recorded absolute paths, checkpoints, or datasets are available in
+this checkout. Downstream benchmark result JSON files referenced by the report
+generators are absent; the committed benchmark CSV tables are derived evidence
+and are identified as such in the documentation.

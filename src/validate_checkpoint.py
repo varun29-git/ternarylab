@@ -59,7 +59,7 @@ def validate_checkpoint(checkpoint_path: str) -> dict:
         print(f"\nResume contract fingerprint: {resume_contract.get('fingerprint', 'unknown')[:16]}...")
 
         model_config_dict = resume_contract.get("model_config", {})
-        print(f"\nModel configuration from checkpoint:")
+        print("\nModel configuration from checkpoint:")
         print(f"  vocab_size: {model_config_dict.get('vocab_size')}")
         print(f"  dim: {model_config_dict.get('dim')}")
         print(f"  n_layers: {model_config_dict.get('n_layers')}")
@@ -77,7 +77,7 @@ def validate_checkpoint(checkpoint_path: str) -> dict:
 
     # Check model state
     model_state = checkpoint.get("model", {})
-    print(f"\nModel state:")
+    print("\nModel state:")
     print(f"  Number of parameters: {len(model_state)}")
 
     total_params = sum(p.numel() for p in model_state.values() if isinstance(p, torch.Tensor))
@@ -85,7 +85,7 @@ def validate_checkpoint(checkpoint_path: str) -> dict:
 
     # Check optimizer state
     optimizer_state = checkpoint.get("optimizer", {})
-    print(f"\nOptimizer state:")
+    print("\nOptimizer state:")
     print(f"  State dict keys: {list(optimizer_state.keys()) if isinstance(optimizer_state, dict) else 'Not a dict'}")
 
     return {
@@ -110,7 +110,7 @@ def test_model_instantiation(config_dict: dict) -> bool:
         model = BitNetLlama(config)
 
         counts = model.count_parameters()
-        print(f"\nModel instantiated successfully!")
+        print("\nModel instantiated successfully!")
         print(f"Total parameters: {counts['total']:,}")
         print(f"  Transformer parameters: {counts.get('transformer', 0):,}")
         print(f"  Embedding parameters: {counts.get('embedding', 0):,}")

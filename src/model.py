@@ -15,7 +15,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from kernels import (
+from kernels import (  # noqa: E402
     assert_backend_usable,
     flash_attention3,
     flex_attention_forward,
@@ -1423,8 +1423,6 @@ class BitNetAttention(nn.Module):
                 head_gram += flat_probs @ flat_probs.transpose(0, 1)
 
         count_safe = finite_count.clamp_min(1.0)
-        head_mean = logit_sum / count_safe
-        head_std = torch.sqrt((logit_sq_sum / count_safe - head_mean.square()).clamp_min(0.0))
         query_count = float(seq_len)
         denom = torch.sqrt(torch.diagonal(head_gram).clamp_min(1e-30))
         similarity = head_gram / (denom[:, None] * denom[None, :])
@@ -1642,7 +1640,6 @@ class BitNetAttention(nn.Module):
         legal_key_count = causal.sum(dim=-1).clamp_min(2).to(dtype=entropy.dtype)
         normalized_query_entropy = entropy / legal_key_count.log().view(1, 1, -1)
         max_probability = probs.amax(dim=-1)
-        head_max = masked_logits.amax(dim=(-1, -2)).squeeze(0)
         head_entropy = entropy.mean(dim=(0, 2))
         head_normalized_entropy = normalized_query_entropy.mean(dim=(0, 2))
 
@@ -2653,13 +2650,6 @@ class BitNetLlama(nn.Module):
                 [
                     torch.zeros(sorted_abs.shape[0], 1, device=grouped.device, dtype=grouped.dtype),
                     torch.cumsum(sorted_abs, dim=1),
-                ],
-                dim=1,
-            )
-            prefix_sq = torch.cat(
-                [
-                    torch.zeros(sorted_abs.shape[0], 1, device=grouped.device, dtype=grouped.dtype),
-                    torch.cumsum(sorted_abs.square(), dim=1),
                 ],
                 dim=1,
             )

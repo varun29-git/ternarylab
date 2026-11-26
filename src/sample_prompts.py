@@ -11,7 +11,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-from sample import generate, load_model_and_tokenizer, resolve_device, resolve_paths, set_seed
+from sample import generate, load_model_and_tokenizer, resolve_device, resolve_paths, set_seed  # noqa: E402
 
 
 DEFAULT_PROMPTS = [

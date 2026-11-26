@@ -77,7 +77,9 @@ The following records agree:
 - `resolved_budget.json` records 261,580 total steps, 114,688 tokens per step, and 29,999,996,928 usable cumulative tokens.
 - `milestones/final/metrics.json` records step 261,580, the same token count, and the final checkpoint path.
 - `logs/exit_code.txt` contains `0`.
-- The final benchmark files identify checkpoint SHA-256 `91e51df1...f613fe8` at step 261,580. [E1, E4, E5]
+
+The checkpoint file itself and its tensor-level hash are not included in the
+committed evidence. [E1, E4]
 
 The run resumed from `ckpt_step_033136.pt`; it was not an independent 228,444-step run. All schedule positions and curriculum positions remained cumulative. [E2]
 
@@ -87,11 +89,11 @@ The run resumed from `ckpt_step_033136.pt`; it was not an independent 228,444-st
 
 ## What the bundle contains
 
-The analysis used 2,637 raw training records, 131 raw scheduled-validation records, 52 attention snapshots, 52 optimizer/dynamics snapshots, a final exhaustive milestone scan, and two independently evaluated checkpoints over five downstream tasks. After resume-overlap canonicalization, there are 2,620 unique training steps and 130 unique scheduled validations. [E3, E4, E5, E7]
+The committed evidence contains 2,637 raw training records, 131 raw scheduled-validation records, 52 attention snapshots, 52 optimizer/dynamics snapshots, and a final exhaustive milestone scan. After resume-overlap canonicalization, there are 2,620 unique training steps and 130 unique scheduled validations. The original analysis also consumed two downstream-evaluated checkpoints over five tasks; this checkout retains only the derived benchmark tables, not their raw result JSON. [E3, E4, E5, E7]
 
 ## What the bundle does not contain
 
-The source mirror does not include checkpoint tensors, per-layer gradient telemetry, FFN/residual activation telemetry, optimizer momentum/adaptive-state tensors, GPU utilization or power series, allocator-event traces, dataloader queue depth, host-transfer timing, or distributed collective logs. It contains only two downstream-evaluated checkpoint states and 52 sampled weight/update trajectories. Therefore this paper cannot literally compare checkpoint tensors, diagnose dead neurons, measure gradient anisotropy, identify momentum saturation, or certify full-sequence attention behavior. These are explicit evidence gaps. [E7]
+The committed evidence does not include checkpoint tensors, per-layer gradient telemetry, FFN/residual activation telemetry, optimizer momentum/adaptive-state tensors, GPU utilization or power series, allocator-event traces, dataloader queue depth, host-transfer timing, distributed collective logs, or raw downstream result JSON. It contains derived results for two downstream-evaluated checkpoint states and 52 sampled weight/update trajectories. Therefore this paper cannot literally compare checkpoint tensors, diagnose dead neurons, measure gradient anisotropy, identify momentum saturation, independently reverify downstream scores, or certify full-sequence attention behavior. These are explicit evidence gaps. [E5, E7]
 
 # Training Configuration
 
@@ -215,7 +217,7 @@ No gradient clipping was configured. This was safe in the observed run, but the 
 
 ## Momentum, adaptive statistics, and trust ratios
 
-The requested Muon momentum, Adam second moments, trust ratios, and per-parameter effective learning rates are not in the source mirror. Update telemetry shows their aggregate result but not their internal state. No claim about momentum saturation or Adam variance collapse is supportable.
+The requested Muon momentum, Adam second moments, trust ratios, and per-parameter effective learning rates are not in the committed evidence. Update telemetry shows their aggregate result but not their internal state. No claim about momentum saturation or Adam variance collapse is supportable.
 
 # Quantization Analysis
 
@@ -332,7 +334,7 @@ The bundle has no activation extrema, BF16 underflow counters, kernel exception 
 | WinoGrande | raw accuracy | 51.93% | 52.41% | +0.47 | 0.24 |
 | SciQ | raw accuracy | 77.50% | 76.80% | -0.70 | -0.37 |
 
-The same dataset revisions, model hash, checkpoint loading mode, BF16 precision, SDPA reference backend, and evaluation implementation were used for both checkpoints. Four point estimates improved and SciQ declined. None of the conservative unpaired z magnitudes reaches 1.96; paired prediction-level outcomes were not saved, so exact paired significance cannot be calculated. The late phase is therefore best described as mixed task reallocation with the clearest positive movement on LAMBADA, not universal improvement. [E5, E7]
+The original analysis recorded the same dataset revisions, model hash, checkpoint loading mode, BF16 precision, SDPA reference backend, and evaluation implementation for both checkpoints. Those conditions and the scores cannot be independently reverified because the raw result JSON is absent. In the surviving derived tables, four point estimates improved and SciQ declined. None of the conservative unpaired z magnitudes reaches 1.96; paired prediction-level outcomes were not saved, so exact paired significance cannot be calculated. Subject to that evidence limitation, the late phase is best described as mixed task reallocation with the clearest positive movement on LAMBADA, not universal improvement. [E5, E7]
 
 The benchmark comparison begins at step 209,264, not at the best-validation step 252,000. It cannot decide whether step 252,000 would dominate final. The final checkpoint's held-out loss is worse, but LAMBADA may still prefer later training. Checkpoint selection must be based on the intended deployment objective.
 
@@ -493,20 +495,34 @@ The run should be accepted as **successful architecture and systems evidence**, 
 
 # Evidence Registry
 
-- **E1 — Identity and budget:** `source_artifacts/.../RUN_ID.json`, `configs/resolved_budget.json`, `logs/exit_code.txt`.
+All run-relative paths below are under `provenance/30b-run/`.
+
+- **E1 — Identity and budget:** `RUN_ID.json`, `configs/resolved_budget.json`, `logs/exit_code.txt`.
 - **E2 — Configuration and provenance:** `configs/train_config.json`, `model_config.json`, `data_manifest.json`, `environment.json`, `initialization_report.json`, `kernel_policy.json`, `resume_contract.json`.
-- **E3 — Time series:** `logs/train.jsonl`, `validation.jsonl`, `attention.jsonl`, `dynamics.jsonl`.
+- **E3 — Time series:** `logs/train.jsonl.gz` (lossless compression of `train.jsonl`), `validation.jsonl`, `attention.jsonl`, `dynamics.jsonl`.
 - **E4 — Final exhaustive evidence:** `milestones/final/metrics.json`.
-- **E5 — Downstream evaluation:** `evaluations/ckpt_step_209264.pt/*/result.json` and `evaluations/ckpt_final.pt/*/result.json`.
-- **E6 — Exact source semantics:** repository commit `fb7e349`; all six recorded source SHA-256 values match that commit.
+- **E5 — Downstream evaluation:** the original analysis consumed `evaluations/ckpt_step_209264.pt/*/result.json` and `evaluations/ckpt_final.pt/*/result.json`. Those raw files are **not present in this public-release checkout or any local branch**. The surviving committed evidence is the derived `forensic_outputs/benchmark_comparison.csv` and `tables/evaluation_comparison.csv`; downstream numbers are therefore reported results, not independently raw-reverified claims.
+- **E6 — Exact source semantics:** source commit `fb7e349` in the archived research repository; all six recorded source SHA-256 values match the frozen files under `provenance/30b-run/source/`.
 - **E7 — Reproducible derived analysis:** `forensic_analysis.py`, `forensic_outputs/analysis_summary.json`, `snapshot_features_5k.csv`, `correlations.csv`, `phase_statistics.csv`, `resume_overlap.csv`, `system_events.csv`, `final_quantization_by_role.csv`, and `benchmark_comparison.csv`.
 
 # Reproduction
 
-From the repository root:
+From the repository root, run the raw/derived consistency check with the Python
+standard library:
 
 ```bash
-.venv/bin/python technical_reports_bundle/test17_30b_training_report/forensic_analysis.py
+python3 reports/30b/check_consistency.py
 ```
 
-The script fails if required logs are absent, canonicalizes resume overlap by latest timestamp per step, regenerates all forensic tables, and recreates the new figures used in this paper.
+Full forensic regeneration requires NumPy, Matplotlib, and the raw downstream
+result JSON files described in E5:
+
+```bash
+python3 reports/30b/forensic_analysis.py
+```
+
+The script fails explicitly when required evidence is absent, canonicalizes
+resume overlap by latest timestamp per step, regenerates all forensic tables,
+and recreates the figures used in this paper. It does not silently treat the
+committed benchmark CSV as a replacement for missing raw evaluation output.
+See `reports/30b/README.md` for the complete evidence boundary.

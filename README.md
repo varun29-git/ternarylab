@@ -1,15 +1,16 @@
-# Terminus Flagship 30B
+# TernaryLab
 
-**“30B” means 30 billion training tokens, not 30 billion parameters.** This
-repository documents a completed **29,999,996,928-token** pretraining run of a
-**150,436,648-parameter (150.44M)** weight-ternary Transformer++. It contains
-continuing source code, immutable run evidence, and technical analyses; it is
-not a 30B-parameter model release.
+TernaryLab is a general research framework for weight-ternary language-model training, checkpoint evaluation, and forensic run analysis. Its reference case is a completed **29,999,996,928-token** pretraining run of a **150,436,648-parameter (150.44M)** weight-ternary Transformer++. The repository contains continuing source code, immutable run evidence, and technical analyses.
 
-The canonical run is
-`fresh-h100-curriculum-30b-rmsmatch-b28-nativealloc-20260731T200059Z`.
-It was a single-run, single-H100 experiment, not a scaling-law result or a
-multi-GPU qualification.
+**In the reference run, “30B” means 30 billion training tokens, not 30 billion parameters.** The canonical run is `fresh-h100-curriculum-30b-rmsmatch-b28-nativealloc-20260731T200059Z`. It was a single-run, single-H100 experiment, not a scaling-law result, a 30B-parameter model release, or a multi-GPU qualification.
+
+## Development timeline
+
+| Date | Milestone |
+| --- | --- |
+| July–August 2026 | The 150.44M-parameter reference model completed its 30B-token H100 training run; source and raw telemetry were preserved. |
+| August–September 2026 | Downstream evaluation, precision analysis, and end-to-end forensic reports developed. |
+| **27 November 2026** | **Training source, immutable evidence, analysis tools, and limitations published as the first open-source release under Apache-2.0.** |
 
 ## Verified run results
 
